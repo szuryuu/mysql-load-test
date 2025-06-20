@@ -1,0 +1,50 @@
+db_dsn: "benchmarker:q19+C3B;-o9z?b:R@tcp(34.50.79.143:3306)/botmasterdb"
+queries_data_source:
+  type: db
+  db:
+    dsn: "root:root@tcp(127.0.0.1:13306)/MySQLLoadTester?parseTime=true"
+    fingerprint_weights_query: |
+      with queryFingerprintTotal as (
+        select 
+          count(*) as c
+        from QueryFingerprint qf
+      )
+      select
+        qf2.Fingerprint as Fingerprint,
+        qf2.Hash as Hash,
+        count(*) as Count,
+        qft.c as Total,
+        cast(count(*) as decimal(10,4)) / qft.c * 100 as Weight
+      from QueryFingerprint qf2
+      cross join queryFingerprintTotal qft on 1=1
+      where 
+        qf2.Fingerprint not like 'insert%'
+        and qf2.Fingerprint not like 'update botika_voicebotstream_limit%'
+      group by qf2.Hash
+    queries_fetch_query: |
+      select 
+        q.Query, qf.Fingerprint
+      from 
+        Query q
+      inner join 
+        QueryFingerprint qf 
+          on qf.Hash = q.FingerprintHash
+      where 
+        q.ID = {{.ID}}
+      limit 1
+
+    queries_ids_fetch_query: |
+      select 
+        ID,
+        FingerprintHash
+      from 
+        Query
+
+count: -1
+run_mode: random
+reporting:
+  file: /dev/stdout
+  format: human
+concurrency: 100
+metrics:
+  enabled: true

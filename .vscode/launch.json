@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Query Collector",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/internal/cmd/query-collector",
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "collect",
+                "--input.pcap.file=samples/api-mysql.pcap.zst",
+                "--input.type=pcap",
+                "--input.encoding=zstd",
+                "--import-name",
+                "api",
+                "--output.type",
+                "cache",
+                "--output.encoding",
+                "zstd",
+                "--output.cache.file",
+                "api-mysql.cache.zst"
+            ]
+        }
+    ]
+}

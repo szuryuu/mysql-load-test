@@ -1,0 +1,9 @@
+FROM golang:1.24
+
+RUN apt-get update && \
+    apt-get install -y ca-certificates build-essential && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+ENTRYPOINT [ "./test/integration/run_migrator.sh" ]

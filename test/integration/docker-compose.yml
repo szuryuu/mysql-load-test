@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: MySQLLoadTester
+    ports:
+      - "13306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./my.cnf:/etc/mysql/conf.d/my.cnf
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrator:
+    restart: on-failure
+    build:
+      context: ../..
+      dockerfile: test/integration/Dockerfile.migrator
+    environment:
+      DB_URL: mysql://root:root@tcp(mysql:3306)/MySQLLoadTester
+    volumes:
+      - ../../:/app
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
+    driver: local
