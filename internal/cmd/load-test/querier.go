@@ -199,12 +199,9 @@ func (q *Querier) Run(ctx context.Context) error {
 		select {
 		default:
 			if q.qpsTicker != nil {
-				select {
-				case <-q.qpsTicker.C:
-					err := q.do(ctx)
-					if err != nil {
-						return err
-					}
+				<-q.qpsTicker.C
+				if err := q.do(ctx); err != nil {
+					return err
 				}
 			} else {
 				err := q.do(ctx)
