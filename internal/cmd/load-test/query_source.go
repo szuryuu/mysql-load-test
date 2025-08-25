@@ -51,6 +51,10 @@ func (qw *QueryFingerprintWeights) Add(fingerprint string, weight float64, finge
 func (qw *QueryFingerprintWeights) GetRandomWeighted() *QueryFingerprintData {
 	var selectedFingerprintData *QueryFingerprintData
 
+	if qw.totalWeight <= 0 || len(qw.weights) == 0 {
+		return nil
+	}
+
 	r := rand.Float64() * qw.totalWeight
 	cursor := 0.0
 
@@ -60,6 +64,10 @@ func (qw *QueryFingerprintWeights) GetRandomWeighted() *QueryFingerprintData {
 			selectedFingerprintData = queryWeight.fingerprintData
 			break
 		}
+	}
+
+	for _, queryWeight := range qw.weights {
+		return queryWeight.fingerprintData
 	}
 
 	return selectedFingerprintData
