@@ -1,10 +1,11 @@
+db_dsn: "root:root@tcp(127.0.0.1:13306)/MySQLLoadTester?parseTime=true&tls=false"
 queries_data_source:
   type: db
   db:
-    dsn: "root:root@tcp(127.0.0.1:13306)/MySQLLoadTester?parseTime=true"
+    dsn: "root:root@tcp(127.0.0.1:13306)/MySQLLoadTester?parseTime=true&tls=false"
     fingerprint_weights_query: |
       with queryFingerprintTotal as (
-        select 
+        select
           count(*) as c
         from QueryFingerprint qf
       )
@@ -16,27 +17,27 @@ queries_data_source:
         cast(count(*) as decimal(10,4)) / qft.c * 100 as Weight
       from QueryFingerprint qf2
       cross join queryFingerprintTotal qft on 1=1
-      where 
+      where
         qf2.Fingerprint not like 'insert%'
         and qf2.Fingerprint not like 'update botika_voicebotstream_limit%'
       group by qf2.Hash
     queries_fetch_query: |
-      select 
+      select
         q.Query, qf.Fingerprint
-      from 
+      from
         Query q
-      inner join 
-        QueryFingerprint qf 
+      inner join
+        QueryFingerprint qf
           on qf.Hash = q.FingerprintHash
-      where 
+      where
         q.ID = {{.ID}}
       limit 1
 
     queries_ids_fetch_query: |
-      select 
+      select
         ID,
         FingerprintHash
-      from 
+      from
         Query
 
 count: -1

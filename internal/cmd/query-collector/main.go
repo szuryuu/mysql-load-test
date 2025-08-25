@@ -221,7 +221,7 @@ func NewCommand() *cobra.Command {
 	// Mark required flags
 	cmd.MarkFlagRequired("input.type")
 	cmd.MarkFlagRequired("input.encoding")
-	cmd.MarkFlagRequired("import-name")
+	// cmd.MarkFlagRequired("import-name")
 
 	return cmd
 }

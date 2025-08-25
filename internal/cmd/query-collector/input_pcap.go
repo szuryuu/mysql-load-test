@@ -9,7 +9,6 @@ import (
 	"mysql-load-test/pkg/query"
 
 	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcapgo"
 )
 
@@ -91,7 +90,8 @@ func (i *InputPcap) extractQueriesFromPcap(ctx context.Context, outChan chan<- *
 			timestamp := ci.Timestamp
 			_ = timestamp
 
-			newPkt := gopacket.NewPacket(pktBytes[20:], layers.LayerTypeIPv4, gopacket.Default)
+			// newPkt := gopacket.NewPacket(pktBytes[20:], layers.LayerTypeIPv4, gopacket.Default)
+			newPkt := gopacket.NewPacket(pktBytes, pcapReader.LinkType(), gopacket.Default)
 
 			appLayer := newPkt.ApplicationLayer()
 			if appLayer == nil {

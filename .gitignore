@@ -4,3 +4,5 @@ scripts/pattern-output/
 scripts/
 samples/
 .vscode/
+capture_no_ssl.pcap
+queries.txt
