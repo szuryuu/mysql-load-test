@@ -2,10 +2,11 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"html/template"
+	"math"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
@@ -58,14 +59,58 @@ func (ui *WebUI) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (ui *WebUI) broadcastStats(stats *PerformanceStats) {
+func sanitizeReport(report *Report) (sanitized *Report, changed bool) {
+	// Deep copy the report to avoid mutating the original
+	copy := *report
+	changed = false
+
+	// Sanitize Aggregates
+
+	// Sanitize InternalStats
+	if copy.InternalStats != nil {
+		if math.IsNaN(copy.InternalStats.CacheHitRate) || math.IsInf(copy.InternalStats.CacheHitRate, 0) {
+			copy.InternalStats.CacheHitRate = 0
+			changed = true
+		}
+		// Lats is a slice of float64
+		for i, v := range copy.InternalStats.Lats {
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				copy.InternalStats.Lats[i] = 0
+				changed = true
+			}
+		}
+	}
+	// Sanitize Lats in Report
+	for i, v := range copy.Lats {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			copy.Lats[i] = 0
+			changed = true
+		}
+	}
+	return &copy, changed
+}
+
+func (ui *WebUI) broadcastStats(stats *Report) {
 	ui.mu.Lock()
 	defer ui.mu.Unlock()
 
+	sanitized, changed := sanitizeReport(stats)
+
 	for client := range ui.clients {
-		err := client.WriteJSON(stats)
+		// Try marshaling to JSON first to catch errors
+		data, err := json.Marshal(sanitized)
 		if err != nil {
-			log.Error().Err(err).Msg("Failed to send stats to client")
+			log.Error().Err(err).Msg("Failed to marshal stats to JSON (possible non-finite float value)")
+			if changed {
+				log.Warn().Msg("Sanitized non-finite float values in stats before sending to client")
+			}
+			client.Close()
+			delete(ui.clients, client)
+			continue
+		}
+		err = client.WriteMessage(websocket.TextMessage, data)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to send stats to client (WebSocket write error)")
 			client.Close()
 			delete(ui.clients, client)
 		}
@@ -83,21 +128,4 @@ func (ui *WebUI) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error rendering template", http.StatusInternalServerError)
 		return
 	}
-}
-
-type PerformanceStats struct {
-	Timestamp         time.Time `json:"timestamp"`
-	Runtime           string    `json:"runtime"`
-	QueriesFetched    int64     `json:"queries_fetched"`
-	CacheHits         int64     `json:"cache_hits"`
-	CacheMisses       int64     `json:"cache_misses"`
-	CacheHitRate      float64   `json:"cache_hit_rate"`
-	CacheEvictions    int64     `json:"cache_evictions"`
-	CacheNewItems     int64     `json:"cache_new_items"`
-	FetchWeightsLat   string    `json:"fetch_weights_lat"`
-	QueryLatencyP50   string    `json:"query_latency_p50"`
-	QueryLatencyP95   string    `json:"query_latency_p95"`
-	QueryLatencyP99   string    `json:"query_latency_p99"`
-	QueriesPerSecond  float64   `json:"queries_per_second"`
-	ActiveConnections int       `json:"active_connections"`
 }

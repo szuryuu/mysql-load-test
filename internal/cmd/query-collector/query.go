@@ -2,6 +2,7 @@ package main
 
 import (
 	stdbytes "bytes"
+	"fmt"
 
 	"github.com/bagaswh/mysql-toolkit/pkg/bytes"
 )
@@ -34,10 +35,14 @@ func bytesTrimFuncInPlace(b []byte, fn func(byte) bool) []byte {
 	i := 0
 	bi := 0
 	trailingTrimAt := -1
+	iter := 0
 	for i < len(b) {
-		if bi == 0 && fn(b[i]) {
-			i++
-			continue
+		iter++
+		if bi == 0 {
+			if fn(b[i]) {
+				i++
+				continue
+			}
 		}
 		b[bi] = b[i]
 		if fn(b[bi]) {
@@ -50,6 +55,8 @@ func bytesTrimFuncInPlace(b []byte, fn func(byte) bool) []byte {
 		bi++
 		i++
 	}
+
+	fmt.Println("iter", iter, "len", len(b))
 
 	if trailingTrimAt != -1 {
 		return b[:trailingTrimAt:trailingTrimAt]
@@ -81,8 +88,8 @@ func isValidQuery(q []byte) bool {
 
 var invalidFingerprintPrefixes = [][]byte{
 	// this contains multiple select somehow
-	[]byte("select ticket_status, chat_log_id_start, chat_log_id_end from botika_helpdesk_tickets where bot_id = ? and ticket_status != ? and ticket_status != ? and ticket_group = ? select ticket_status, chat_log_id_start, chat_log_id_end from botika_helpdesk_tickets where bot_id = ? and ticket_status != ? and ticket_status != ? and user_id = ? order by ticket_idx desc limit ?"),
-	[]byte("select ticket_status, ticket_idx, creation_date, chat_log_id_start, chat_log_idx_start, chat_log_id_end from botika_helpdesk_tickets where bot_id = ? and ticket_status != ? and ticket_status != ? and ticket_group = ? select ticket_status, ticket_idx, creation_date, chat_log_id_start, chat_log_idx_start, chat_log_id_end from botika_helpdesk_tickets where bot_id = ? and ticket_status != ? and ticket_status != ? and user_id = ? order by ticket_idx desc limit ?"),
+	// []byte("select ticket_status, chat_log_id_start, chat_log_id_end from botika_helpdesk_tickets where bot_id = ? and ticket_status != ? and ticket_status != ? and ticket_group = ? select ticket_status, chat_log_id_start, chat_log_id_end from botika_helpdesk_tickets where bot_id = ? and ticket_status != ? and ticket_status != ? and user_id = ? order by ticket_idx desc limit ?"),
+	// []byte("select ticket_status, ticket_idx, creation_date, chat_log_id_start, chat_log_idx_start, chat_log_id_end from botika_helpdesk_tickets where bot_id = ? and ticket_status != ? and ticket_status != ? and ticket_group = ? select ticket_status, ticket_idx, creation_date, chat_log_id_start, chat_log_idx_start, chat_log_id_end from botika_helpdesk_tickets where bot_id = ? and ticket_status != ? and ticket_status != ? and user_id = ? order by ticket_idx desc limit ?"),
 	[]byte("select * from rule_state"),
 	[]byte("select * from rule_action"),
 	[]byte("select * from botika_push_messages"),

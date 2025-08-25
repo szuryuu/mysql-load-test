@@ -5,7 +5,7 @@ go 1.24.3
 require (
 	github.com/DataDog/zstd v1.5.7
 	github.com/alitto/pond/v2 v2.3.4
-	github.com/bagaswh/mysql-toolkit v0.0.12
+	github.com/bagaswh/mysql-toolkit v0.0.14
 	github.com/cespare/xxhash v1.1.0
 	github.com/go-playground/validator v9.31.0+incompatible
 	github.com/go-playground/validator/v10 v10.16.0

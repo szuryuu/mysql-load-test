@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,17 +55,46 @@ func (d *DBConn) Open(dsn string, concurrency int) error {
 	d.dsn = dsn
 	d.concurrency = concurrency
 
-	return d.connect()
+	return d.connect(context.Background())
 }
 
-func (d *DBConn) connect() error {
+var (
+	ErrTimeoutConnection = errors.New("timeout connecting to database")
+)
+
+func (d *DBConn) OpenWithTimeout(ctx context.Context, dsn string, concurrency int, timeout time.Duration) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.dsn = dsn
+	d.concurrency = concurrency
+
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, ErrTimeoutConnection)
+	defer cancel()
+
+	done := make(chan error)
+
+	go func() {
+		err := d.connect(ctx)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ErrTimeoutConnection
+	}
+}
+
+func (d *DBConn) connect(ctx context.Context) error {
 	db, err := sql.Open("mysql", d.dsn)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 
 	// Test the connection
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
@@ -82,9 +113,9 @@ func (d *DBConn) connect() error {
 	return nil
 }
 
-func (d *DBConn) reconnect() error {
+func (d *DBConn) reconnect(ctx context.Context) error {
 	log.Println("Attempting to reconnect to database...")
-	return d.connect()
+	return d.connect(ctx)
 }
 
 func (d *DBConn) Close() error {
@@ -118,27 +149,12 @@ func (d *DBConn) isConnectionError(err error) bool {
 	}
 
 	for _, connErr := range connectionErrors {
-		if contains(errStr, connErr) {
+		if strings.Contains(errStr, connErr) {
 			return true
 		}
 	}
 
 	return false
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || (len(s) > len(substr) &&
-		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
-			indexOf(s, substr) >= 0)))
-}
-
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
 }
 
 func (d *DBConn) withRetry(ctx context.Context, operation func() error) error {
@@ -168,7 +184,7 @@ func (d *DBConn) withRetry(ctx context.Context, operation func() error) error {
 
 		if d.isConnectionError(err) {
 			d.mu.Lock()
-			reconnectErr := d.reconnect()
+			reconnectErr := d.reconnect(ctx)
 			d.mu.Unlock()
 
 			if reconnectErr != nil {

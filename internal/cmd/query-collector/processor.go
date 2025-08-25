@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"hash"
@@ -60,9 +61,12 @@ type Processor struct {
 	rawQueriesHashCache   *cache[uint64]
 	fingerprintsCache     *cache[[]byte]
 	fingerprintsHashCache *cache[uint64]
-	lexerPool             sync.Pool
-	hasherPool            sync.Pool
-	bufferPool            sync.Pool
+	lexerPool             *sync.Pool
+	hasherPool            *sync.Pool
+	bufferPool            *sync.Pool
+
+	normalizeRawConfig         normalizer.Config
+	normalizeFingerprintConfig normalizer.Config
 }
 
 func NewProcessor(cfg ProcessorConfig) (*Processor, error) {
@@ -111,9 +115,17 @@ func NewProcessor(cfg ProcessorConfig) (*Processor, error) {
 		rawQueriesHashCache:   rawQueriesHashCache,
 		fingerprintsCache:     fingerprintsCache,
 		fingerprintsHashCache: fingerprintsHashCache,
-		lexerPool:             lexerPool,
-		hasherPool:            hasherPool,
-		bufferPool:            bufferPool,
+		lexerPool:             &lexerPool,
+		hasherPool:            &hasherPool,
+		bufferPool:            &bufferPool,
+
+		normalizeRawConfig: normalizer.Config{
+			KeywordCase:    normalizer.CaseLower,
+			RemoveLiterals: false},
+		normalizeFingerprintConfig: normalizer.Config{
+			KeywordCase:    normalizer.CaseLower,
+			RemoveLiterals: true,
+		},
 	}, nil
 }
 
@@ -127,7 +139,6 @@ func (p *Processor) startProgressReporting(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
-				fmt.Println("Processing complete")
 				return
 			case <-p.progressTicker.C:
 				progress := p.progress.Load()
@@ -142,23 +153,53 @@ func (p *Processor) startProgressReporting(ctx context.Context) {
 
 func normalizeAndPutToCache(q []byte, cache *cache[[]byte], config normalizer.Config, lexer *lexer.Lexer, buf []byte) ([]byte, []byte, error) {
 	existing, ok := cache.Get(q)
+	if ok {
+		return existing, buf, nil
+	}
 
-	if !ok {
-		for {
-			n, _, err := normalizer.Normalize(config, lexer, q, buf)
-			if err == normalizer.ErrBufferTooSmall {
-				buf = make([]byte, cap(buf)*2)
-				continue
-			} else if err != nil {
-				return q, buf, fmt.Errorf("error normalizing query: %w", err)
+	if cap(buf) < len(q)*2 {
+		buf = make([]byte, len(q)*2)
+	}
+	buf = buf[:cap(buf)]
+
+	for {
+		n, _, err := normalizer.Normalize(config, lexer, q, buf)
+		if err == normalizer.ErrBufferTooSmall {
+			buf = make([]byte, cap(buf)*2)
+			continue
+		} else if err != nil {
+			return q, buf, fmt.Errorf("error normalizing query: %w", err)
+		}
+
+		result := make([]byte, n)
+		copy(result, buf[:n])
+		cache.Set(q, result)
+		return result, buf, nil
+	}
+}
+
+var escapedWhitespaces = [256]bool{
+	't': true,
+	'n': true,
+	'r': true,
+}
+
+func isEscapedWhitespace(b byte) bool {
+	return escapedWhitespaces[b]
+}
+
+// select * \n from `botika_accounts` \n where `account_id` = 'ult21dru297'
+func removeEscapedWhitespaces(q []byte) []byte {
+	for i := 0; i < len(q); i++ {
+		b := q[i]
+		if b == '\\' {
+			if i+1 < len(q) && isEscapedWhitespace(q[i+1]) {
+				copy(q[i:], "  ")
+				i++
 			}
-			existing = make([]byte, n)
-			copy(existing, buf[:n])
-			cache.Set(q, existing)
-			break
 		}
 	}
-	return existing, buf, nil
+	return q
 }
 
 func (p *Processor) processorGoroutine(ctx context.Context, inQueryChan <-chan *query.Query, outQueryChan chan<- *query.Query, errsChan chan<- error, fatalErrsChan chan<- error) {
@@ -180,13 +221,15 @@ func (p *Processor) processorGoroutine(ctx context.Context, inQueryChan <-chan *
 			// origRaw := make([]byte, len(q.Raw))
 			// copy(origRaw, q.Raw)
 
-			q.Raw = bytesTrimSpace(q.Raw)
+			// q.Raw = bytesTrimSpace(q.Raw)
+			q.Raw = removeEscapedWhitespaces(q.Raw)
+			q.Raw = bytes.TrimSpace(q.Raw)
 
-			if !isValidQuery(q.Raw) {
+			if q.CompletelyProcessed {
 				continue
 			}
 
-			if q.CompletelyProcessed {
+			if !isValidQuery(q.Raw) {
 				continue
 			}
 
@@ -196,10 +239,7 @@ func (p *Processor) processorGoroutine(ctx context.Context, inQueryChan <-chan *
 			}
 
 			var err error
-			q.Raw, buf, err = normalizeAndPutToCache(q.Raw, p.rawQueriesCache, normalizer.Config{
-				KeywordCase:    normalizer.CaseLower,
-				RemoveLiterals: false,
-			}, lexer, buf)
+			q.Raw, buf, err = normalizeAndPutToCache(q.Raw, p.rawQueriesCache, p.normalizeRawConfig, lexer, buf)
 			if err != nil {
 				errsChan <- fmt.Errorf("error normalizing query: %w", err)
 				continue
@@ -214,12 +254,7 @@ func (p *Processor) processorGoroutine(ctx context.Context, inQueryChan <-chan *
 			}
 
 			if q.Fingerprint == nil || len(q.Fingerprint) == 0 {
-				q.Fingerprint, buf, err = normalizeAndPutToCache(q.Raw, p.fingerprintsCache, normalizer.Config{
-					KeywordCase:    normalizer.CaseLower,
-					RemoveLiterals: true, // fingerprinting
-					// PutBacktickOnKeywords:   true,
-					// PutSpaceBeforeOpenParen: true,
-				}, lexer, buf)
+				q.Fingerprint, buf, err = normalizeAndPutToCache(q.Raw, p.fingerprintsCache, p.normalizeFingerprintConfig, lexer, buf)
 				if err != nil {
 					errsChan <- fmt.Errorf("error normalizing fingerprint for query: %w", err)
 					continue

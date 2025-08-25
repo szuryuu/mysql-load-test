@@ -25,7 +25,7 @@ func (o *OutputStats) StartOutput(ctx context.Context, inQueryChan <-chan *query
 		o.queryCounts[string(q.Raw)]++
 		o.fingerprintCounts[string(q.Fingerprint)]++
 	}
-	// o.printStats()
+	o.printStats()
 	return nil
 }
 

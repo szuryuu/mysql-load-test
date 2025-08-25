@@ -224,6 +224,7 @@ func (o *OutputDB) execContext(ctx context.Context, tx *sqlx.Tx, query string, a
 
 func (o *OutputDB) StartOutput(ctx context.Context, inQueryChan <-chan *query.Query) error {
 	if o.cfg.Truncate {
+		fmt.Println("Truncating tables")
 		if err := o.truncateTables(ctx); err != nil {
 			return fmt.Errorf("error truncating tables: %w", err)
 		}

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -25,6 +24,20 @@ func createDataSource(cfg *Config) (QueryDataSource, error) {
 func performLoadTest() error {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
+
+	dbConn := NewDBConn(RetryConfig{
+		MaxRetries:      1,                      // Retry up to 3 times
+		InitialDelay:    100 * time.Millisecond, // Start with 100ms delay
+		MaxDelay:        5 * time.Second,        // Cap at 5 seconds
+		BackoffFactor:   2.0,                    // Double delay each retry
+		ConnectionCheck: true,                   // Ping before queries
+	})
+	logger.Info().Msg("Opening connection to target database")
+	if err := dbConn.OpenWithTimeout(ctx, config.DBDSN, config.Concurrency, 5*time.Second); err != nil {
+		return fmt.Errorf("error opening database connection: %w", err)
+	}
+	defer dbConn.Close()
+	logger.Info().Msg("Connection to target database opened")
 
 	logger.Info().Str("data_source_type", config.QueriesDataSource.Type).Msg("Creating query data source")
 	qds, qdsCreateErr := createDataSource(&config)
@@ -67,20 +80,6 @@ func performLoadTest() error {
 
 	var wg sync.WaitGroup
 
-	dbConn := NewDBConn(RetryConfig{
-		MaxRetries:      3,                      // Retry up to 3 times
-		InitialDelay:    100 * time.Millisecond, // Start with 100ms delay
-		MaxDelay:        5 * time.Second,        // Cap at 5 seconds
-		BackoffFactor:   2.0,                    // Double delay each retry
-		ConnectionCheck: true,                   // Ping before queries
-	})
-	logger.Info().Msg("Opening connection to target database")
-	if err := dbConn.Open(config.DBDSN, config.Concurrency); err != nil {
-		return fmt.Errorf("error opening database connection: %w", err)
-	}
-	defer dbConn.Close()
-	logger.Info().Msg("Connection to target database opened")
-
 	querier := NewQuerier(qds, qpsTicker, &logger, dbConn, resultsChan)
 
 	wg.Add(config.Concurrency)
@@ -98,66 +97,9 @@ func performLoadTest() error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for range resultsChan {
-			// Results are now handled by the web UI
-		}
-	}()
-
-	wg.Add(1)
-	// Stats reporter
-	go func() {
-		defer wg.Done()
-
-		startTime := time.Now()
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				// collect stats from components
-				qdsPerfStats := qds.PerfStats().(QuerySourceDBInternalPerfStats)
-				querierPerfStats := querier.PerfStats()
-
-				// Calculate latency percentiles
-				lats := querierPerfStats.GetRandomWeightedQueryLats()
-				var p50, p95, p99 time.Duration
-				if len(lats) > 0 {
-					sort.Slice(lats, func(i, j int) bool { return lats[i] < lats[j] })
-					p50 = lats[len(lats)*50/100]
-					p95 = lats[len(lats)*95/100]
-					p99 = lats[len(lats)*99/100]
-				}
-
-				// Calculate QPS
-				qps := float64(querierPerfStats.GetTotalQueries()) / time.Since(startTime).Seconds()
-
-				// Create stats object
-				stats := &PerformanceStats{
-					Timestamp:         time.Now(),
-					Runtime:           time.Since(startTime).Round(time.Second).String(),
-					QueriesFetched:    int64(qdsPerfStats.QueriesFetchTotal),
-					CacheHits:         int64(qdsPerfStats.CacheStats.HitsTotal),
-					CacheMisses:       int64(qdsPerfStats.CacheStats.MissesTotal),
-					CacheHitRate:      float64(qdsPerfStats.CacheStats.HitsTotal) / float64(qdsPerfStats.CacheStats.HitsTotal+qdsPerfStats.CacheStats.MissesTotal) * 100,
-					CacheEvictions:    int64(qdsPerfStats.CacheStats.EvictionsTotal),
-					CacheNewItems:     int64(qdsPerfStats.CacheStats.NewItemsTotal),
-					FetchWeightsLat:   qdsPerfStats.FetchWeightsLat.Round(time.Millisecond).String(),
-					QueryLatencyP50:   p50.Round(time.Millisecond).String(),
-					QueryLatencyP95:   p95.Round(time.Millisecond).String(),
-					QueryLatencyP99:   p99.Round(time.Millisecond).String(),
-					QueriesPerSecond:  qps,
-					ActiveConnections: config.Concurrency,
-				}
-
-				// Broadcast stats to web UI
-				if metricsServer != nil {
-					metricsServer.BroadcastStats(stats)
-				}
-			}
-		}
+		r := newReport(resultsChan)
+		logger.Info().Msg("Starting reporter")
+		runReporter(r, ctx, qds, querier, metricsServer)
 	}()
 
 	signalChan := make(chan os.Signal, 1)

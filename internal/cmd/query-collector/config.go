@@ -6,6 +6,7 @@ import "time"
 type AppConfig struct {
 	Input InputCommonConfig `json:"input"`
 
+	InputTsharkTxt InputTsharkTxtConfig `json:"input_tshark_txt"`
 	// InputCache InputCacheConfig `json:"input_cache"`
 	InputPcap InputPcapConfig `json:"input_pcap"`
 

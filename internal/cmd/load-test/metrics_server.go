@@ -59,8 +59,8 @@ func (s *MetricsServer) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *MetricsServer) BroadcastStats(stats *PerformanceStats) {
+func (s *MetricsServer) BroadcastStats(report *Report) {
 	if s.webUI != nil {
-		s.webUI.broadcastStats(stats)
+		s.webUI.broadcastStats(report)
 	}
 }

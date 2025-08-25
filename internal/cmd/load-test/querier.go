@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"mysql-load-test/internal/ringbuffer"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -132,24 +131,24 @@ func (q *Querier) executeQuery(ctx context.Context, query string, args ...any) (
 	var explainLatency time.Duration
 	var execErr error
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		start := time.Now()
-		var err error
-		explainQueryResult, err = q.explainQuery(ctx, query, args...)
-		explainLatency = time.Since(start)
-		if err != nil {
-			logger.Info().Msgf("failed to explain query: %s\n", err)
-		}
-	}()
+	// var wg sync.WaitGroup
+	// wg.Add(1)
+	// go func() {
+	// 	defer wg.Done()
+	// 	start := time.Now()
+	// 	var err error
+	// 	explainQueryResult, err = q.explainQuery(ctx, query, args...)
+	// 	explainLatency = time.Since(start)
+	// 	if err != nil {
+	// 		logger.Info().Msgf("failed to explain query: %s\n", err)
+	// 	}
+	// }()
 
 	start := time.Now()
 	_, execErr = q.db.ExecContext(ctx, query, args...)
 	execLatency := time.Since(start)
 
-	wg.Wait()
+	// wg.Wait()
 
 	return &QueryResult{
 		Explain:             explainQueryResult,
@@ -163,6 +162,7 @@ func (q *Querier) executeQuery(ctx context.Context, query string, args ...any) (
 func (q *Querier) do(ctx context.Context) error {
 	// a := time.Now()
 	query, err := q.qds.GetRandomWeightedQuery(ctx)
+	// fmt.Println(query.Query, query.Fingerprint)
 	// q.perfStats.RecordGetRandomWeightedQueryLat(time.Since(a))
 	if err != nil {
 		return fmt.Errorf("error getting random weighted query: %w", err)
@@ -175,11 +175,22 @@ func (q *Querier) do(ctx context.Context) error {
 	execLat := time.Since(execStart)
 	_ = execLat
 
+	// if err != nil {
+	// 	return fmt.Errorf("error executing query \"%s\" with fingerprint \"%s\": %w", query.Query, query.Fingerprint, err)
+	// }
+
+	var querierErr querierError
 	if err != nil {
-		return fmt.Errorf("error executing query \"%s\" with fingerprint \"%s\": %w", query.Query, query.Fingerprint, err)
+		querierErr = querierError{
+			query:       query.Query,
+			fingerprint: query.Fingerprint,
+			err:         err,
+		}
 	}
+	result.Err = querierErr
 
 	q.results <- result
+	// fmt.Println(result.ExecLatency.Microseconds())
 	return nil
 }
 
@@ -187,22 +198,32 @@ func (q *Querier) Run(ctx context.Context) error {
 	for {
 		select {
 		default:
-			// if q.qpsTicker != nil {
-			// 	select {
-			// 	case <-q.qpsTicker.C:
-			// 		err := q.do(ctx)
-			// 		if err != nil {
-			// 			return err
-			// 		}
-			// 	}
-			// } else {
-			err := q.do(ctx)
-			if err != nil {
-				return err
+			if q.qpsTicker != nil {
+				select {
+				case <-q.qpsTicker.C:
+					err := q.do(ctx)
+					if err != nil {
+						return err
+					}
+				}
+			} else {
+				err := q.do(ctx)
+				if err != nil {
+					return err
+				}
 			}
-			// }
 		case <-ctx.Done():
 			return nil
 		}
 	}
+}
+
+type querierError struct {
+	query       string
+	fingerprint string
+	err         error
+}
+
+func (qe querierError) Error() string {
+	return fmt.Sprintf("error executing query \"%s\" with fingerprint \"%s\": %v", qe.query, qe.fingerprint, qe.err)
 }

@@ -1,4 +1,3 @@
-db_dsn: "benchmarker:q19+C3B;-o9z?b:R@tcp(34.50.79.143:3306)/botmasterdb"
 queries_data_source:
   type: db
   db:

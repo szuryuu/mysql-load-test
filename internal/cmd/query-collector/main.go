@@ -3,12 +3,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/pprof"
 	"syscall"
 	"time"
 
@@ -31,8 +32,8 @@ func NewImportCmd(cfg *AppConfig) *CollectCmd {
 
 func createInput(cfg *AppConfig, inputCommon *InputCommon) (Input, error) {
 	switch cfg.Input.Type {
-	// case "cache":
-	// 	return NewInputCache(cfg.InputCache, inputCommon)
+	case "tshark-txt":
+		return NewInputTsharkTxt(cfg.InputTsharkTxt, inputCommon)
 	case "pcap":
 		return NewInputPcap(cfg.InputPcap, inputCommon)
 	default:
@@ -57,8 +58,8 @@ func (c *CollectCmd) Execute() error {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 
-	extractedQueriesChan := make(chan *query.Query, 10_000_000)
-	processedQueriesChan := make(chan *query.Query, 10_000_000)
+	extractedQueriesChan := make(chan *query.Query, 1_000_000)
+	processedQueriesChan := make(chan *query.Query, 1_000_000)
 
 	// input
 	inCommon := NewInputCommon(InputCommonConfig{
@@ -75,15 +76,9 @@ func (c *CollectCmd) Execute() error {
 			cancel(fmt.Errorf("error extracting queries: %w", err))
 			return
 		}
+		fmt.Println("Extraction completed")
 		close(extractedQueriesChan)
 	}()
-
-	// i := 0
-	// for range extractedQueriesChan {
-	// 	// fmt.Println(string(q.Raw))
-	// 	i++
-	// 	fmt.Println(i)
-	// }
 
 	// processor
 	proc, err := NewProcessor(ProcessorConfig{
@@ -99,6 +94,7 @@ func (c *CollectCmd) Execute() error {
 			cancel(fmt.Errorf("error processing queries: %w", err))
 			return
 		}
+		fmt.Println("Processor completed")
 		close(processedQueriesChan)
 	}()
 
@@ -118,11 +114,15 @@ func (c *CollectCmd) Execute() error {
 				cancel(fmt.Errorf("error starting output: %w", err))
 				return
 			}
+			fmt.Println("Output completed")
+			cancel(nil)
 		}()
 	} else {
 		fmt.Fprintf(os.Stderr, "WARNING: since no output is configured, the processed queries will be discarded\n")
 		for range processedQueriesChan {
 		}
+		fmt.Println("Output completed")
+		cancel(nil)
 	}
 
 	signalChan := make(chan os.Signal, 1)
@@ -130,15 +130,17 @@ func (c *CollectCmd) Execute() error {
 
 	select {
 	case <-ctx.Done():
-		if err := context.Cause(ctx); err != nil && err.Error() != "interrupted by user" {
+		fmt.Printf("Received interrupt, exiting...\n")
+		if err := context.Cause(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			fmt.Printf("Cause: %s\n", err.Error())
 			return err
 		}
+		return nil
 	case <-signalChan:
 		fmt.Println("Received SIGTERM/SIGINT, exiting...")
+		cancel(nil)
 		return nil
 	}
-
-	return nil
 }
 
 // NewCommand creates a new cobra command for importing queries
@@ -155,6 +157,8 @@ func NewCommand() *cobra.Command {
 
 			cfg.Input.Encoding, _ = cmd.Flags().GetString("input.encoding")
 			cfg.Input.Type, _ = cmd.Flags().GetString("input.type")
+
+			cfg.InputTsharkTxt.File, _ = cmd.Flags().GetString("input.tshark-txt.file")
 
 			// cfg.InputCache.File, _ = cmd.Flags().GetString("input.cache.file")
 			// cfg.InputCache.ImportName = importnName
@@ -185,6 +189,9 @@ func NewCommand() *cobra.Command {
 	// input
 	cmd.Flags().String("input.type", "", "Type of the input file (cache, pcap)")
 	cmd.Flags().String("input.encoding", "", "Encoding of the input file (plain, gzip, zstd)")
+
+	// input.tshark-txt
+	cmd.Flags().String("input.tshark-txt.file", "", "Path to the tshark-txt file containing queries")
 
 	// input.cache
 	cmd.Flags().String("input.cache.file", "", "Path to the cache file containing queries")
@@ -220,9 +227,39 @@ func NewCommand() *cobra.Command {
 }
 
 func main() {
-	go func() {
-		log.Println(http.ListenAndServe("localhost:6060", nil))
-	}()
+	cpuProfilerFileOutput := os.Getenv("CPU_PROFILER_FILE_OUTPUT")
+	if cpuProfilerFileOutput != "" {
+		f, err := os.Create(cpuProfilerFileOutput)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+
+	memProfilerFileOutput := os.Getenv("MEM_PROFILER_FILE_OUTPUT")
+	if memProfilerFileOutput != "" {
+		f, err := os.Create(memProfilerFileOutput)
+		if err != nil {
+			log.Fatal(err)
+		}
+		writeTicker := time.NewTicker(time.Second)
+		defer writeTicker.Stop()
+		go func() {
+			select {
+			case <-ctx.Done():
+				pprof.WriteHeapProfile(f)
+				f.Sync()
+				return
+			case <-writeTicker.C:
+				pprof.WriteHeapProfile(f)
+				f.Sync()
+			}
+		}()
+	}
 
 	if err := NewCommand().Execute(); err != nil {
 		fmt.Println(err)
