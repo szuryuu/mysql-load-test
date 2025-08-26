@@ -24,12 +24,9 @@ queries_data_source:
       group by qf2.Hash
     queries_fetch_query: |
       select
-        q.Query, qf.Fingerprint
+        q.Offset, q.Length
       from
         Query q
-      inner join
-        QueryFingerprint qf
-          on qf.Hash = q.FingerprintHash
       where
         q.ID = {{.ID}}
       limit 1

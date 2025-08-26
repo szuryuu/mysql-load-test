@@ -252,6 +252,9 @@ func (qsdb *QuerySourceDB) GetRandomWeightedQuery(ctx context.Context) (*QueryDa
 	}
 
 	row, err := qsdb.db.QueryRowContext(ctx, fetchQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute fetch query for ID %d: %w", queryId, err)
+	}
 	if err := row.Scan(&offset, &length); err != nil {
 		return nil, fmt.Errorf("failed to scan offset/length from DB for ID %d: %w", queryId, err)
 	}
