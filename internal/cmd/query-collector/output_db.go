@@ -96,6 +96,28 @@ func (o *OutputDB) insertBatch(ctx context.Context, batch []*query.Query) (int, 
 	}
 	defer tx.Rollback()
 
+	fingerprintValues := make([]string, 0, len(batch))
+	fingerprintArgs := make([]interface{}, 0, len(batch)*2)
+	seenFingerprints := make(map[uint64]bool)
+
+	for _, q := range batch {
+		if !seenFingerprints[q.FingerprintHash] {
+			seenFingerprints[q.FingerprintHash] = true
+			fingerprintValues = append(fingerprintValues, "(?, ?)")
+			fingerprintArgs = append(fingerprintArgs, q.Fingerprint, q.FingerprintHash)
+		}
+	}
+
+	if len(fingerprintValues) > 0 {
+		fingerprintSQL := fmt.Sprintf(`
+			INSERT IGNORE INTO QueryFingerprint (Fingerprint, Hash)
+			VALUES %s
+		`, strings.Join(fingerprintValues, ", "))
+		if _, err := tx.ExecContext(ctx, fingerprintSQL, fingerprintArgs...); err != nil {
+			return 0, fmt.Errorf("failed to batch insert fingerprints: %w", err)
+		}
+	}
+
 	queryValues := make([]string, 0, len(batch))
 	queryArgs := make([]interface{}, 0, len(batch)*4)
 	seenQueries := make(map[uint64]bool)

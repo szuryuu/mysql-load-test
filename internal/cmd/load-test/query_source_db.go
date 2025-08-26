@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math/rand"
@@ -242,21 +243,7 @@ func (qsdb *QuerySourceDB) GetRandomWeightedQuery(ctx context.Context) (*QueryDa
 		return nil, fmt.Errorf("no query IDs found for fingerprint hash: %d", fingerprintHash)
 	}
 
-	queriesCache, ok := qsdb.queriesCaches[fingerprintHash]
-	if !ok {
-		qsdb.mu.Lock()
-		if _, ok = qsdb.queriesCaches[fingerprintHash]; !ok {
-			qsdb.queriesCaches[fingerprintHash] = lrucache.New[int, *QueryDataSourceResult](len(queryIds))
-		}
-		queriesCache = qsdb.queriesCaches[fingerprintHash]
-		qsdb.mu.Unlock()
-	}
-
 	queryId := queryIds[rand.Intn(len(queryIds))]
-
-	if val, ok := queriesCache.Get(queryId); ok {
-		return val, nil
-	}
 
 	var offset, length uint64
 	fetchQuery, err := executeTemplate(qsdb.cfg.QueriesFetchQuery, map[string]any{"ID": queryId}, "queries_fetch_query")
@@ -275,12 +262,17 @@ func (qsdb *QuerySourceDB) GetRandomWeightedQuery(ctx context.Context) (*QueryDa
 		return nil, fmt.Errorf("failed to read query from file at offset %d: %w", offset, err)
 	}
 
-	queryResult := &QueryDataSourceResult{
-		Query:       string(queryBytes),
-		Fingerprint: fingerprintData.Fingerprint,
+	parts := bytes.SplitN(queryBytes, []byte("\t"), 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid query format in file at offset %d", offset)
 	}
 
-	queriesCache.Set(queryId, queryResult)
+	rawQuery := bytes.TrimSpace(parts[1])
+
+	queryResult := &QueryDataSourceResult{
+		Query:       string(rawQuery),
+		Fingerprint: fingerprintData.Fingerprint,
+	}
 
 	qsdb.mu.Lock()
 	qsdb.perfStats.QueriesFetchTotal++
