@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -84,90 +85,7 @@ func (o *OutputDB) truncateTables(ctx context.Context) error {
 	return tx.Commit()
 }
 
-func (o *OutputDB) insertQueryBatch(ctx context.Context, batch []*query.Query) error {
-	if len(batch) == 0 {
-		return nil
-	}
-
-	// Filter valid queries first
-	validQueries := make([]*query.Query, 0, len(batch))
-	for _, q := range batch {
-		if isValidQuery(q.Raw) {
-			validQueries = append(validQueries, q)
-		}
-	}
-
-	if len(validQueries) == 0 {
-		return nil
-	}
-
-	tx, err := o.db.BeginTxx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	// Build fingerprint batch insert
-	fingerprintValues := make([]string, 0, len(validQueries))
-	fingerprintArgs := make([]interface{}, 0, len(validQueries)*2)
-
-	// Track unique fingerprints to avoid duplicates in the same batch
-	seenFingerprints := make(map[uint64]bool)
-
-	for _, q := range validQueries {
-		if !seenFingerprints[q.FingerprintHash] {
-			seenFingerprints[q.FingerprintHash] = true
-			fingerprintValues = append(fingerprintValues, "(?, ?)")
-			fingerprintArgs = append(fingerprintArgs, q.FingerprintHash, q.Fingerprint)
-		}
-	}
-
-	// Insert/update fingerprints in batch
-	if len(fingerprintValues) > 0 {
-		fingerprintSQL := fmt.Sprintf(`
-			INSERT INTO QueryFingerprint (Hash, Fingerprint)
-			VALUES %s
-			`, strings.Join(fingerprintValues, ", "))
-
-		// ON DUPLICATE KEY UPDATE Count = Count + VALUES(Count)
-
-		if _, err := o.execContext(ctx, tx, fingerprintSQL, fingerprintArgs...); err != nil {
-			return fmt.Errorf("failed to batch insert fingerprints: %w", err)
-		}
-	}
-
-	// Build query batch insert
-	queryValues := make([]string, 0, len(validQueries))
-	queryArgs := make([]interface{}, 0, len(validQueries)*3)
-
-	// Track unique queries to avoid duplicates in the same batch
-	seenQueries := make(map[uint64]bool)
-
-	for _, q := range validQueries {
-		if !seenQueries[q.Hash] {
-			seenQueries[q.Hash] = true
-			queryValues = append(queryValues, "(?, ?, ?)")
-			queryArgs = append(queryArgs, q.Hash, q.Raw, q.FingerprintHash)
-		}
-	}
-
-	// Insert/update queries in batch
-	if len(queryValues) > 0 {
-		querySQL := fmt.Sprintf(`
-			INSERT INTO Query (Hash, Query, FingerprintHash)
-			VALUES %s
-			`, strings.Join(queryValues, ", "))
-
-		// ON DUPLICATE KEY UPDATE Count = Count + VALUES(Count)
-		if _, err := o.execContext(ctx, tx, querySQL, queryArgs...); err != nil {
-			return fmt.Errorf("failed to batch insert queries: %w", err)
-		}
-	}
-
-	return tx.Commit()
-}
-
-func (o *OutputDB) insertQueryBatch2(ctx context.Context, batch []*query.Query) (int, error) {
+func (o *OutputDB) insertBatch(ctx context.Context, batch []*query.Query) (int, error) {
 	if len(batch) == 0 {
 		return 0, nil
 	}
@@ -178,41 +96,36 @@ func (o *OutputDB) insertQueryBatch2(ctx context.Context, batch []*query.Query) 
 	}
 	defer tx.Rollback()
 
-	n := 0
-
-	fingerprintValuesCount := 0
-	fingerprintValues := make([]any, 0, len(batch))
-
-	queryValuesCount := 0
-	queryValues := make([]any, 0, len(batch))
+	queryValues := make([]string, 0, len(batch))
+	queryArgs := make([]interface{}, 0, len(batch)*4)
+	seenQueries := make(map[uint64]bool)
 
 	for _, q := range batch {
-		fingerprintValues = append(fingerprintValues, q.FingerprintHash, q.Fingerprint)
-		fingerprintValuesCount++
-
-		queryValues = append(queryValues, q.Hash, q.Raw, q.FingerprintHash)
-		queryValuesCount++
-
-		n++
+		if !isValidQuery(q.Raw) {
+			continue
+		}
+		if !seenQueries[q.Hash] {
+			seenQueries[q.Hash] = true
+			queryValues = append(queryValues, "(?, ?, ?, ?)")
+			queryArgs = append(queryArgs, q.Hash, q.Offset, q.Length, q.FingerprintHash)
+		}
 	}
 
-	fingerprintSQL := fmt.Sprintf(`INSERT INTO QueryFingerprint (Hash, Fingerprint)
-		VALUES %s`, strings.Repeat("(?, ?), ", fingerprintValuesCount-1))
-	fingerprintSQL += "(?, ?)"
-
-	querySQL := fmt.Sprintf(`INSERT INTO Query (Hash, Query, FingerprintHash)
-			VALUES %s`, strings.Repeat("(?, ?, ?), ", queryValuesCount-1))
-	querySQL += "(?, ?, ?)"
-
-	if _, err := o.execContext(ctx, tx, fingerprintSQL, fingerprintValues...); err != nil {
-		return 0, fmt.Errorf("failed to batch insert fingerprints: %w", err)
+	if len(queryValues) == 0 {
+		return 0, tx.Commit()
 	}
 
-	if _, err := o.execContext(ctx, tx, querySQL, queryValues...); err != nil {
+	querySQL := fmt.Sprintf(`
+    INSERT INTO Query (Hash, Offset, Length, FingerprintHash)
+    VALUES %s
+    `, strings.Join(queryValues, ", "))
+
+	if _, err := o.execContext(ctx, tx, querySQL, queryArgs...); err != nil {
 		return 0, fmt.Errorf("failed to batch insert queries: %w", err)
 	}
 
-	return n, tx.Commit()
+	return len(seenQueries), tx.Commit()
+
 }
 
 func (o *OutputDB) execContext(ctx context.Context, tx *sqlx.Tx, query string, args ...interface{}) (sql.Result, error) {
@@ -268,8 +181,8 @@ func (o *OutputDB) StartOutput(ctx context.Context, inQueryChan <-chan *query.Qu
 		if len(batch) >= o.cfg.BatchSize {
 			var n int
 			var err error
-			if n, err = o.insertQueryBatch2(ctx, batch); err != nil {
-				return fmt.Errorf("error inserting query: %w", err)
+			if n, err = o.insertBatch(ctx, batch); err != nil {
+				fmt.Fprintf(os.Stderr, "error inserting batch: %v\n", err)
 			}
 			o.insertedQueries.Add(uint64(n))
 			batch = batch[:0]
@@ -278,10 +191,12 @@ func (o *OutputDB) StartOutput(ctx context.Context, inQueryChan <-chan *query.Qu
 
 	// CRITICAL FIX: Process the final partial batch
 	if len(batch) > 0 {
-		if err := o.insertQueryBatch(ctx, batch); err != nil {
-			return fmt.Errorf("error inserting final batch: %w", err)
+		var n int
+		var err error
+		if n, err = o.insertBatch(ctx, batch); err != nil {
+			fmt.Fprintf(os.Stderr, "error inserting final batch: %v\n", err)
 		}
-		o.insertedQueries.Add(uint64(len(batch)))
+		o.insertedQueries.Add(uint64(n))
 	}
 
 	return nil

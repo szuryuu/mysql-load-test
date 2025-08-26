@@ -65,16 +65,24 @@ func (i *InputPcap) Destroy() error {
 }
 
 func (i *InputPcap) extractQueriesFromPcap(ctx context.Context, outChan chan<- *query.Query) error {
+	file, ok := i.reader.(io.ReadSeeker)
+	if !ok {
+		return fmt.Errorf("reader must be io.ReadSeeker to get offsets")
+	}
+
 	pcapReader, err := pcapgo.NewReader(i.reader)
 	if err != nil {
 		return fmt.Errorf("error creating pcapgo reader: %w", err)
 	}
 
+	var offset int64
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
+			posBefore, _ := file.Seek(0, io.SeekCurrent)
+
 			pktBytes, ci, err := pcapReader.ReadPacketData()
 			if err != nil {
 				if err == io.EOF {
@@ -83,16 +91,15 @@ func (i *InputPcap) extractQueriesFromPcap(ctx context.Context, outChan chan<- *
 				return fmt.Errorf("error reading packet: %w", err)
 			}
 
+			posAfter, _ := file.Seek(0, io.SeekCurrent)
+			offset = posBefore
+			length := posAfter - posBefore
+
 			if ci.CaptureLength < ci.Length {
 				continue
 			}
 
-			timestamp := ci.Timestamp
-			_ = timestamp
-
-			// newPkt := gopacket.NewPacket(pktBytes[20:], layers.LayerTypeIPv4, gopacket.Default)
 			newPkt := gopacket.NewPacket(pktBytes, pcapReader.LinkType(), gopacket.Default)
-
 			appLayer := newPkt.ApplicationLayer()
 			if appLayer == nil {
 				continue
@@ -107,8 +114,9 @@ func (i *InputPcap) extractQueriesFromPcap(ctx context.Context, outChan chan<- *
 			}
 
 			outChan <- &query.Query{
-				Raw:       payload[5:],
-				Timestamp: uint64(timestamp.Unix()),
+				Offset:    uint64(offset),
+				Length:    uint64(length),
+				Timestamp: uint64(ci.Timestamp.Unix()),
 			}
 		}
 	}

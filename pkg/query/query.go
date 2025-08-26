@@ -12,6 +12,8 @@ type Query struct {
 	Timestamp           uint64 `json:"timestamp"`
 	FingerprintHash     uint64 `json:"fingerprint_hash"`
 	CompletelyProcessed bool   `json:"completely_processed"`
+	Offset              uint64 `json:"offset"`
+	Length              uint64 `json:"length"`
 }
 
 const (
@@ -24,6 +26,8 @@ const (
 	_TIMESTAMP_OFF            = _FINGERPRINT_LENGTH_OFF + 8
 	_HASH_OFF                 = _TIMESTAMP_OFF + 8
 	_FINGERPRINT_HASH_OFF     = _HASH_OFF + 8
+	_OFFSET_OFF               = _FINGERPRINT_HASH_OFF + 8
+	_LENGTH_OFF               = _OFFSET_OFF + 8
 	_HEADER_END_OFF           = _FINGERPRINT_HASH_OFF + 8
 )
 
@@ -35,6 +39,8 @@ func (q *Query) GetSize() int {
 	size += 8  // Timestamp
 	size += 8  // Hash
 	size += 8  // FingerprintHash
+	size += 8  // Offset
+	size += 8  // Length
 	size += len(q.Raw)
 	size += len(q.Fingerprint)
 	return size
@@ -55,6 +61,8 @@ func (q *Query) MarshalBinary(buf []byte) (int, error) {
 	binary.PutUvarint(buf[_TIMESTAMP_OFF:], q.Timestamp)
 	binary.PutUvarint(buf[_HASH_OFF:], q.Hash)
 	binary.PutUvarint(buf[_FINGERPRINT_HASH_OFF:], q.FingerprintHash)
+	binary.PutUvarint(buf[_OFFSET_OFF:], q.Offset)
+	binary.PutUvarint(buf[_LENGTH_OFF:], q.Length)
 
 	i := _HEADER_END_OFF
 	n := copy(buf[i:], q.Raw)

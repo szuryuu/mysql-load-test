@@ -65,30 +65,41 @@ func (i *InputTsharkTxt) Destroy() error {
 }
 
 func (i *InputTsharkTxt) extractQueries(ctx context.Context, outChan chan<- *query.Query) error {
-	var r = bufio.NewScanner(i.reader)
-	buf := make([]byte, 5*1024*1024)
-	r.Buffer(buf, cap(buf))
+	file, ok := i.reader.(io.ReadSeeker)
+	if !ok {
+		return fmt.Errorf("reader must be io.ReadSeeker to track offset")
+	}
+
+	br := bufio.NewReader(file)
+	var offset int64 = 0
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			if !r.Scan() {
-				if err := r.Err(); err != nil {
-					return fmt.Errorf("error scanning file: %w", err)
-				}
+			lineStart := offset
+
+			line, err := br.ReadBytes('\n')
+			if err == io.EOF {
 				return nil
 			}
+			if err != nil {
+				return fmt.Errorf("error reading file: %w", err)
+			}
 
-			line := r.Bytes()
-			lineCopy := make([]byte, len(line))
-			copy(lineCopy, line)
+			lineLen := len(line)
+			offset += int64(lineLen)
 
-			q, parseErr := i.parseTsharkTxtLine(lineCopy)
+			q, parseErr := i.parseTsharkTxtLine(line)
 			if parseErr != nil {
 				return fmt.Errorf("error parsing line: %w", parseErr)
 			}
+
+			q.Raw = nil
+			q.Offset = uint64(lineStart)
+			q.Length = uint64(lineLen)
+
 			outChan <- q
 		}
 	}
@@ -123,10 +134,7 @@ func (i *InputTsharkTxt) parseTsharkTxtLine(line []byte) (*query.Query, error) {
 		return nil, fmt.Errorf("error parsing timestamp: %w", parseErr)
 	}
 
-	q := tabsSeparated[1]
-
 	return &query.Query{
-		Raw:       q,
 		Timestamp: uint64(parsedTime.Unix()),
 	}, nil
 }
