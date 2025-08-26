@@ -2,6 +2,7 @@ db_dsn: "root:root@tcp(127.0.0.1:13306)/MySQLLoadTester?parseTime=true&tls=false
 queries_data_source:
   type: db
   db:
+    input_file: "queries.txt"
     dsn: "root:root@tcp(127.0.0.1:13306)/MySQLLoadTester?parseTime=true&tls=false"
     fingerprint_weights_query: |
       with queryFingerprintTotal as (

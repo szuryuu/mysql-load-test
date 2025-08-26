@@ -5,6 +5,6 @@ CREATE TABLE Query (
     `Length` INT UNSIGNED NOT NULL,
     `Hash` BIGINT UNSIGNED NOT NULL,
     -- `Count` INT UNSIGNED NOT NULL DEFAULT 1,
-    FingerprintHash BIGINT UNSIGNED NOT NULL
+    FingerprintHash BIGINT UNSIGNED NOT NULL,
     UNIQUE KEY `idx_hash` (`Hash`)
 );
