@@ -122,6 +122,7 @@ func (i *InputTsharkTxt) parseTsharkTxtLine(line []byte) (*query.Query, error) {
 	}
 
 	timestamp := string(tabsSeparated[0])
+	rawQuery := bytes.TrimSpace(tabsSeparated[1])
 
 	var parsedTime time.Time
 	var parseErr error
@@ -137,6 +138,6 @@ func (i *InputTsharkTxt) parseTsharkTxtLine(line []byte) (*query.Query, error) {
 
 	return &query.Query{
 		Timestamp: uint64(parsedTime.Unix()),
-		Raw:       tabsSeparated[1],
+		Raw:       rawQuery,
 	}, nil
 }

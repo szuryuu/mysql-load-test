@@ -246,6 +246,7 @@ func (qsdb *QuerySourceDB) GetRandomWeightedQuery(ctx context.Context) (*QueryDa
 	queryId := queryIds[rand.Intn(len(queryIds))]
 
 	var offset, length uint64
+
 	fetchQuery, err := executeTemplate(qsdb.cfg.QueriesFetchQuery, map[string]any{"ID": queryId}, "queries_fetch_query")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create query fetch template: %w", err)
@@ -259,13 +260,13 @@ func (qsdb *QuerySourceDB) GetRandomWeightedQuery(ctx context.Context) (*QueryDa
 		return nil, fmt.Errorf("failed to scan offset/length from DB for ID %d: %w", queryId, err)
 	}
 
-	queryBytes := make([]byte, length)
-	_, err = qsdb.inputFile.ReadAt(queryBytes, int64(offset))
+	lineBytes := make([]byte, length)
+	_, err = qsdb.inputFile.ReadAt(lineBytes, int64(offset))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read query from file at offset %d: %w", offset, err)
 	}
 
-	parts := bytes.SplitN(queryBytes, []byte("\t"), 2)
+	parts := bytes.SplitN(lineBytes, []byte("\t"), 2)
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid query format in file at offset %d", offset)
 	}
