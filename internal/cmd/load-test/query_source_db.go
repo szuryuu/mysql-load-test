@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"mysql-load-test/internal/lrucache"
+	"os"
 	"strings"
 	"sync"
 	"text/template"
@@ -12,13 +13,11 @@ import (
 )
 
 type QuerySourceDBConfig struct {
-	DSN string `mapstructure:"dsn" yaml:"dsn" validate:"required"`
-
+	DSN                     string `mapstructure:"dsn" yaml:"dsn" validate:"required"`
 	FingerprintWeightsQuery string `mapstructure:"fingerprint_weights_query" yaml:"fingerprint_weights_query" validate:"omitempty"`
-
-	QueriesFetchQuery string `mapstructure:"queries_fetch_query" yaml:"queries_fetch_query" validate:"omitempty"`
-
-	QueriesIdsFetchQuery string `mapstructure:"queries_ids_fetch_query" yaml:"queries_ids_fetch_query" validate:"omitempty"`
+	QueriesFetchQuery       string `mapstructure:"queries_fetch_query" yaml:"queries_fetch_query" validate:"omitempty"`
+	QueriesIdsFetchQuery    string `mapstructure:"queries_ids_fetch_query" yaml:"queries_ids_fetch_query" validate:"omitempty"`
+	InputFile               string `mapstructure:"input_file" yaml:"input_file" validate:"required"`
 }
 
 type QuerySourceDB struct {
@@ -42,6 +41,12 @@ type QuerySourceDB struct {
 	fetchIdsOnce     func() error
 
 	concurrency int
+	inputFile   *os.File
+}
+
+type FileOffsetResult struct {
+	FileOffset uint64
+	FileLength uint64
 }
 
 func executeTemplate(tmpl string, data any, templateName string) (string, error) {
@@ -157,6 +162,12 @@ func (qsdb *QuerySourceDB) Init(ctx context.Context) error {
 	})
 
 	qsdb.initOnce = sync.OnceValue(func() error {
+		file, err := os.Open(qsdb.cfg.InputFile)
+		if err != nil {
+			return fmt.Errorf("gagal membuka file input: %w", err)
+		}
+		qsdb.inputFile = file
+
 		logger.Info().Msg("Opening database connection for query data source DB")
 		db := NewDBConn(RetryConfig{
 			MaxRetries:    3,                      // Retry up to 3 times
@@ -164,7 +175,7 @@ func (qsdb *QuerySourceDB) Init(ctx context.Context) error {
 			MaxDelay:      5 * time.Second,        // Cap at 5 seconds
 			BackoffFactor: 2.0,                    // Double delay each retry
 		})
-		err := db.Open(qsdb.cfg.DSN, qsdb.concurrency)
+		err = db.Open(qsdb.cfg.DSN, qsdb.concurrency)
 		if err != nil {
 			return fmt.Errorf("error opening database: %w", err)
 		}
@@ -194,7 +205,13 @@ func (qsdb *QuerySourceDB) Init(ctx context.Context) error {
 }
 
 func (qsdb *QuerySourceDB) Destroy() error {
-	return qsdb.db.Close()
+	if qsdb.inputFile != nil {
+		qsdb.inputFile.Close()
+	}
+	if qsdb.db != nil {
+		return qsdb.db.Close()
+	}
+	return nil
 }
 
 func (qsdb *QuerySourceDB) PerfStats() any {
@@ -214,79 +231,61 @@ func (qsdb *QuerySourceDB) PerfStats() any {
 
 func (qsdb *QuerySourceDB) GetRandomWeightedQuery(ctx context.Context) (*QueryDataSourceResult, error) {
 	fingerprintData := qsdb.fingerprintWeights.GetRandomWeighted()
+	if fingerprintData == nil {
+		return nil, fmt.Errorf("failed to get random weighted fingerprint")
+	}
+
 	fingerprintHash := fingerprintData.Hash
 
-	queryIds := qsdb.queryIds[fingerprintHash]
+	queryIds, ok := qsdb.queryIds[fingerprintHash]
+	if !ok || len(queryIds) == 0 {
+		return nil, fmt.Errorf("no query IDs found for fingerprint hash: %d", fingerprintHash)
+	}
 
-	qsdb.mu.RLock()
 	queriesCache, ok := qsdb.queriesCaches[fingerprintHash]
 	if !ok {
-		qsdb.mu.RUnlock()
-		queriesCache = lrucache.New[int, *QueryDataSourceResult](len(queryIds))
 		qsdb.mu.Lock()
-		_queriesCache, ok := qsdb.queriesCaches[fingerprintHash]
-		if !ok {
-			qsdb.queriesCaches[fingerprintHash] = queriesCache
-		} else {
-			queriesCache = _queriesCache
+		if _, ok = qsdb.queriesCaches[fingerprintHash]; !ok {
+			qsdb.queriesCaches[fingerprintHash] = lrucache.New[int, *QueryDataSourceResult](len(queryIds))
 		}
+		queriesCache = qsdb.queriesCaches[fingerprintHash]
 		qsdb.mu.Unlock()
-	} else {
-		qsdb.mu.RUnlock()
 	}
 
-	queriesFetchQueryTmpl := qsdb.cfg.QueriesFetchQuery
-	if queriesFetchQueryTmpl == "" {
-		return nil, fmt.Errorf("no query fetch query specified")
-	}
-
-	queryIdIdx := rand.Intn(len(queryIds))
-	queryId := queryIds[queryIdIdx]
+	queryId := queryIds[rand.Intn(len(queryIds))]
 
 	if val, ok := queriesCache.Get(queryId); ok {
 		return val, nil
 	}
 
-	data := map[string]any{
-		"FingerprintHash": fingerprintHash,
-		"ID":              queryId,
-	}
-
-	queriesFetchQuery, templateErr := executeTemplate(queriesFetchQueryTmpl, data, "queries_fetch_query")
-	if templateErr != nil {
-		return nil, fmt.Errorf("error executing query fetch query template: %w", templateErr)
-	}
-
-	rows, err := qsdb.db.QueryContext(ctx, queriesFetchQuery)
+	var offset, length uint64
+	fetchQuery, err := executeTemplate(qsdb.cfg.QueriesFetchQuery, map[string]any{"ID": queryId}, "queries_fetch_query")
 	if err != nil {
-		return nil, fmt.Errorf("error executing query fetch query: %w", err)
-	}
-	defer rows.Close()
-
-	var queryResult *QueryDataSourceResult
-	resultCount := 0
-	for rows.Next() {
-		resultCount++
-		if resultCount > 1 {
-			return nil, fmt.Errorf("query fetch query returned more than one result")
-		}
-		var queryStr string
-		var fingerprintStr string
-		// expect: Query, Fingerprint
-		if err := rows.Scan(&queryStr, &fingerprintStr); err != nil {
-			return nil, fmt.Errorf("error scanning query fetch query: %w", err)
-		}
-		queryResult = &QueryDataSourceResult{
-			Query:       queryStr,
-			Fingerprint: fingerprintStr,
-		}
+		return nil, fmt.Errorf("failed to create query fetch template: %w", err)
 	}
 
-	if queryResult == nil {
-		return nil, fmt.Errorf("query fetch query returned no result for query\n%s", queriesFetchQuery)
+	row, err := qsdb.db.QueryRowContext(ctx, fetchQuery)
+	if err := row.Scan(&offset, &length); err != nil {
+		return nil, fmt.Errorf("failed to scan offset/length from DB for ID %d: %w", queryId, err)
+	}
+
+	queryBytes := make([]byte, length)
+	_, err = qsdb.inputFile.ReadAt(queryBytes, int64(offset))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read query from file at offset %d: %w", offset, err)
+	}
+
+	queryResult := &QueryDataSourceResult{
+		Query:       string(queryBytes),
+		Fingerprint: fingerprintData.Fingerprint,
 	}
 
 	queriesCache.Set(queryId, queryResult)
+
+	qsdb.mu.Lock()
+	qsdb.perfStats.QueriesFetchTotal++
+	qsdb.mu.Unlock()
+
 	return queryResult, nil
 }
 
