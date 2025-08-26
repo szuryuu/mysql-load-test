@@ -93,10 +93,11 @@ func (i *InputTsharkTxt) extractQueries(ctx context.Context, outChan chan<- *que
 
 			q, parseErr := i.parseTsharkTxtLine(line)
 			if parseErr != nil {
-				return fmt.Errorf("error parsing line: %w", parseErr)
+				fmt.Fprintf(os.Stderr, "error parsing line, skipping: %v\n", parseErr)
+				continue
 			}
 
-			q.Raw = nil
+			// q.Raw = nil
 			q.Offset = uint64(lineStart)
 			q.Length = uint64(lineLen)
 
@@ -136,5 +137,6 @@ func (i *InputTsharkTxt) parseTsharkTxtLine(line []byte) (*query.Query, error) {
 
 	return &query.Query{
 		Timestamp: uint64(parsedTime.Unix()),
+		Raw:       tabsSeparated[1],
 	}, nil
 }
