@@ -11,6 +11,8 @@ import (
 	"sync"
 	"text/template"
 	"time"
+
+	"golang.org/x/exp/mmap"
 )
 
 type QuerySourceDBConfig struct {
@@ -42,7 +44,9 @@ type QuerySourceDB struct {
 	fetchIdsOnce     func() error
 
 	concurrency int
-	inputFile   *os.File
+
+	mmapReader *mmap.ReaderAt
+	mmapData   []byte
 }
 
 type FileOffsetResult struct {
@@ -163,18 +167,30 @@ func (qsdb *QuerySourceDB) Init(ctx context.Context) error {
 	})
 
 	qsdb.initOnce = sync.OnceValue(func() error {
-		file, err := os.Open(qsdb.cfg.InputFile)
+		logger.Info().Str("file", qsdb.cfg.InputFile).Msg("Memory mapping the input file")
+		reader, err := mmap.Open(qsdb.cfg.InputFile)
 		if err != nil {
-			return fmt.Errorf("gagal membuka file input: %w", err)
+			return fmt.Errorf("gagal memory-map file input: %w", err)
 		}
-		qsdb.inputFile = file
+		qsdb.mmapReader = reader
+
+		fileInfo, err := os.Stat(qsdb.cfg.InputFile)
+		if err != nil {
+			return fmt.Errorf("gagal mendapatkan info file: %w", err)
+		}
+		qsdb.mmapData = make([]byte, fileInfo.Size())
+		_, err = qsdb.mmapReader.ReadAt(qsdb.mmapData, 0)
+		if err != nil {
+			return fmt.Errorf("gagal membaca data mmap ke slice: %w", err)
+		}
+		logger.Info().Msg("Input file successfully memory-mapped")
 
 		logger.Info().Msg("Opening database connection for query data source DB")
 		db := NewDBConn(RetryConfig{
-			MaxRetries:    3,                      // Retry up to 3 times
-			InitialDelay:  100 * time.Millisecond, // Start with 100ms delay
-			MaxDelay:      5 * time.Second,        // Cap at 5 seconds
-			BackoffFactor: 2.0,                    // Double delay each retry
+			MaxRetries:    3,
+			InitialDelay:  100 * time.Millisecond,
+			MaxDelay:      5 * time.Second,
+			BackoffFactor: 2.0,
 		})
 		err = db.Open(qsdb.cfg.DSN, qsdb.concurrency)
 		if err != nil {
@@ -206,8 +222,8 @@ func (qsdb *QuerySourceDB) Init(ctx context.Context) error {
 }
 
 func (qsdb *QuerySourceDB) Destroy() error {
-	if qsdb.inputFile != nil {
-		qsdb.inputFile.Close()
+	if qsdb.mmapReader != nil {
+		qsdb.mmapReader.Close()
 	}
 	if qsdb.db != nil {
 		return qsdb.db.Close()
@@ -271,11 +287,12 @@ func (qsdb *QuerySourceDB) GetRandomWeightedQuery(ctx context.Context) (*QueryDa
 		return nil, fmt.Errorf("failed to scan offset/length from DB for ID %d: %w", queryId, err)
 	}
 
-	lineBytes := make([]byte, length)
-	_, err = qsdb.inputFile.ReadAt(lineBytes, int64(offset))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read query from file at offset %d: %w", offset, err)
+	end := offset + length
+	if end > uint64(len(qsdb.mmapData)) {
+		return nil, fmt.Errorf("offset + length (%d) melebihi ukuran file mmap (%d)", end, len(qsdb.mmapData))
 	}
+
+	lineBytes := qsdb.mmapData[offset:end]
 
 	parts := bytes.SplitN(lineBytes, []byte("\t"), 2)
 	if len(parts) != 2 {
