@@ -197,20 +197,15 @@ func (q *Querier) do(ctx context.Context) error {
 func (q *Querier) Run(ctx context.Context) error {
 	for {
 		select {
+		case <-ctx.Done():
+			return nil
 		default:
 			if q.qpsTicker != nil {
 				<-q.qpsTicker.C
-				if err := q.do(ctx); err != nil {
-					return err
-				}
-			} else {
-				err := q.do(ctx)
-				if err != nil {
-					return err
-				}
 			}
-		case <-ctx.Done():
-			return nil
+			if err := q.do(ctx); err != nil {
+				q.logger.Error().Err(err).Msg("Error executing query")
+			}
 		}
 	}
 }
