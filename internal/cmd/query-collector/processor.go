@@ -260,6 +260,11 @@ func (p *Processor) processorGoroutine(ctx context.Context, inQueryChan <-chan *
 					continue
 				}
 			}
+
+			if len(q.Fingerprint) == 0 {
+				continue
+			}
+
 			if q.FingerprintHash == 0 && len(q.Fingerprint) > 0 {
 				existingHash, ok := p.fingerprintsHashCache.Get(q.Fingerprint)
 				if ok {

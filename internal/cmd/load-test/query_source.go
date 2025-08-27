@@ -66,8 +66,10 @@ func (qw *QueryFingerprintWeights) GetRandomWeighted() *QueryFingerprintData {
 		}
 	}
 
-	for _, queryWeight := range qw.weights {
-		return queryWeight.fingerprintData
+	if selectedFingerprintData == nil {
+		for _, queryWeight := range qw.weights {
+			return queryWeight.fingerprintData
+		}
 	}
 
 	return selectedFingerprintData
