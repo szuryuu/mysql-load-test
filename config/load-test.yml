@@ -21,6 +21,7 @@ queries_data_source:
       where
         qf2.Fingerprint not like 'insert%'
         and qf2.Fingerprint not like 'update botika_voicebotstream_limit%'
+        and qf2.Fingerprint != ''
       group by qf2.Hash
     queries_fetch_query: |
       select

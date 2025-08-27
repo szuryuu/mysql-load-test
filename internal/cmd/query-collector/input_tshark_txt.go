@@ -124,6 +124,10 @@ func (i *InputTsharkTxt) parseTsharkTxtLine(line []byte) (*query.Query, error) {
 	timestamp := string(tabsSeparated[0])
 	rawQuery := bytes.TrimSpace(tabsSeparated[1])
 
+	if len(rawQuery) == 0 {
+		return nil, fmt.Errorf("empty query in line")
+	}
+
 	var parsedTime time.Time
 	var parseErr error
 	for _, layout := range tsharkTimestampLayouts {
