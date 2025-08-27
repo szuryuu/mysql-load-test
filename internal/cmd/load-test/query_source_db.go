@@ -304,6 +304,10 @@ func (qsdb *QuerySourceDB) GetRandomWeightedQuery(ctx context.Context) (*QueryDa
 
 	rawQuery := bytes.TrimSpace(parts[1])
 
+	if len(rawQuery) == 0 {
+		return nil, fmt.Errorf("read empty query from file at offset %d", offset)
+	}
+
 	queryResult := &QueryDataSourceResult{
 		Query:       string(rawQuery),
 		Fingerprint: fingerprintData.Fingerprint,
