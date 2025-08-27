@@ -170,19 +170,19 @@ func (qsdb *QuerySourceDB) Init(ctx context.Context) error {
 		logger.Info().Str("file", qsdb.cfg.InputFile).Msg("Memory mapping the input file")
 		reader, err := mmap.Open(qsdb.cfg.InputFile)
 		if err != nil {
-			return fmt.Errorf("gagal memory-map file input: %w", err)
+			return fmt.Errorf("failed to memory-map input file: %w", err)
 		}
 		qsdb.mmapReader = reader
 
-		fileInfo, err := os.Stat(qsdb.cfg.InputFile)
+		_, err = os.Stat(qsdb.cfg.InputFile)
 		if err != nil {
-			return fmt.Errorf("gagal mendapatkan info file: %w", err)
+			return fmt.Errorf("failed to get file info: %w", err)
 		}
-		qsdb.mmapData = make([]byte, fileInfo.Size())
-		_, err = qsdb.mmapReader.ReadAt(qsdb.mmapData, 0)
-		if err != nil {
-			return fmt.Errorf("gagal membaca data mmap ke slice: %w", err)
-		}
+		// qsdb.mmapData = make([]byte, fileInfo.Size())
+		// _, err = qsdb.mmapReader.ReadAt(qsdb.mmapData, 0)
+		// if err != nil {
+		// 	return fmt.Errorf("failed to read mmap data into slice: %w", err)
+		// }
 		logger.Info().Msg("Input file successfully memory-mapped")
 
 		logger.Info().Msg("Opening database connection for query data source DB")
@@ -287,12 +287,15 @@ func (qsdb *QuerySourceDB) GetRandomWeightedQuery(ctx context.Context) (*QueryDa
 		return nil, fmt.Errorf("failed to scan offset/length from DB for ID %d: %w", queryId, err)
 	}
 
-	end := offset + length
-	if end > uint64(len(qsdb.mmapData)) {
-		return nil, fmt.Errorf("offset + length (%d) melebihi ukuran file mmap (%d)", end, len(qsdb.mmapData))
+	if offset+length > uint64(qsdb.mmapReader.Len()) {
+		return nil, fmt.Errorf("offset + length (%d) exceeds mmap size (%d)", offset+length, qsdb.mmapReader.Len())
 	}
 
-	lineBytes := qsdb.mmapData[offset:end]
+	lineBytes := make([]byte, length)
+	_, err = qsdb.mmapReader.ReadAt(lineBytes, int64(offset))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read segment data from mmap: %w", err)
+	}
 
 	parts := bytes.SplitN(lineBytes, []byte("\t"), 2)
 	if len(parts) != 2 {
