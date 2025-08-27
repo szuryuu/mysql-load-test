@@ -23,9 +23,12 @@ type queryInfo struct {
 type QuerySourceFile struct {
 	cfg *QuerySourceFileConfig
 
-	dataBuffer         []byte
-	queryInfos         []queryInfo
-	fingerprintIndex   map[uint64][]int
+	dataBuffer []byte
+
+	queryInfos []queryInfo
+
+	fingerprintIndex map[uint64][]int
+
 	fingerprintWeights *QueryFingerprintWeights
 
 	perfStats QuerySourceFileInternalPerfStats
@@ -84,17 +87,23 @@ func (qsf *QuerySourceFile) Init(ctx context.Context) error {
 			}
 			fingerprintHash := binary.LittleEndian.Uint64(qsf.dataBuffer[hashOffset : hashOffset+8])
 
-			queryIndex := len(qsf.queryInfos)
-			qsf.queryInfos = append(qsf.queryInfos, queryInfo{
-				offset: queryOffset,
-				length: queryLength,
-			})
+			if queryLength > 0 {
+				queryIndex := len(qsf.queryInfos)
+				qsf.queryInfos = append(qsf.queryInfos, queryInfo{
+					offset: queryOffset,
+					length: queryLength,
+				})
 
-			qsf.fingerprintIndex[fingerprintHash] = append(qsf.fingerprintIndex[fingerprintHash], queryIndex)
-			fingerprintCounts[fingerprintHash]++
-			totalQueries++
+				qsf.fingerprintIndex[fingerprintHash] = append(qsf.fingerprintIndex[fingerprintHash], queryIndex)
+				fingerprintCounts[fingerprintHash]++
+				totalQueries++
+			}
 
 			cursor = hashOffset + 8
+		}
+
+		if totalQueries == 0 {
+			return fmt.Errorf("no valid queries found in the binary cache file")
 		}
 
 		for hash, count := range fingerprintCounts {
@@ -144,8 +153,11 @@ func (qsf *QuerySourceFile) GetRandomWeightedQuery(ctx context.Context) (*QueryD
 	}
 
 	randomIndex := queryIndices[rand.Intn(len(queryIndices))]
-
 	info := qsf.queryInfos[randomIndex]
+
+	if info.offset+info.length > len(qsf.dataBuffer) || info.length <= 0 {
+		return nil, fmt.Errorf("invalid query info: offset=%d, length=%d, buffer_size=%d", info.offset, info.length, len(qsf.dataBuffer))
+	}
 
 	queryBytes := qsf.dataBuffer[info.offset : info.offset+info.length]
 
