@@ -245,6 +245,17 @@ func (qsdb *QuerySourceDB) GetRandomWeightedQuery(ctx context.Context) (*QueryDa
 
 	queryId := queryIds[rand.Intn(len(queryIds))]
 
+	qsdb.mu.RLock()
+	queryCache, cacheExists := qsdb.queriesCaches[fingerprintHash]
+	qsdb.mu.RUnlock()
+
+	if cacheExists {
+		if queryResult, found := queryCache.Get(queryId); found {
+			qsdb.perfStats.QueriesFetchTotal++
+			return queryResult, nil
+		}
+	}
+
 	var offset, length uint64
 
 	fetchQuery, err := executeTemplate(qsdb.cfg.QueriesFetchQuery, map[string]any{"ID": queryId}, "queries_fetch_query")
@@ -279,7 +290,11 @@ func (qsdb *QuerySourceDB) GetRandomWeightedQuery(ctx context.Context) (*QueryDa
 	}
 
 	qsdb.mu.Lock()
-	qsdb.perfStats.QueriesFetchTotal++
+	if !cacheExists {
+		queryCache = lrucache.New[int, *QueryDataSourceResult](1000)
+		qsdb.queriesCaches[fingerprintHash] = queryCache
+	}
+	queryCache.Set(queryId, queryResult)
 	qsdb.mu.Unlock()
 
 	return queryResult, nil
