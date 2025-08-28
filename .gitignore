@@ -6,3 +6,4 @@ samples/
 .vscode/
 capture_no_ssl.pcap
 queries.txt
+queries.bin
