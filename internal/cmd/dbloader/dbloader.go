@@ -1,8 +1,7 @@
-package main
+package dbloader
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"strings"
@@ -17,6 +16,13 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
+func isValidQuery(q []byte) bool {
+	if len(q) == 0 {
+		return false
+	}
+	return true
+}
+
 type OutputDBConfig struct {
 	Host      string `json:"host"`
 	Port      int    `json:"port"`
@@ -29,14 +35,9 @@ type OutputDBConfig struct {
 
 type OutputDB struct {
 	cfg             OutputDBConfig
-	db              *DB
+	db              *sqlx.DB
 	insertedQueries atomic.Uint64
-	insertLats      chan time.Duration
 	pool            pond.Pool
-}
-
-type DB struct {
-	*sqlx.DB
 }
 
 func NewDBOutput(cfg OutputDBConfig) (*OutputDB, error) {
@@ -48,17 +49,12 @@ func NewDBOutput(cfg OutputDBConfig) (*OutputDB, error) {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	_db := &DB{
-		DB: db,
-	}
-
-	pool := pond.NewPool(10)
+	pool := pond.NewPool(20)
 
 	return &OutputDB{
 		cfg:             cfg,
-		db:              _db,
+		db:              db,
 		insertedQueries: atomic.Uint64{},
-		insertLats:      make(chan time.Duration, 100),
 		pool:            pool,
 	}, nil
 }
@@ -70,19 +66,15 @@ func (o *OutputDB) truncateTables(ctx context.Context) error {
 	}
 	defer tx.Rollback()
 
-	// Truncate in reverse order of foreign key dependencies
 	if _, err := tx.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 0"); err != nil {
 		return fmt.Errorf("failed to disable foreign key checks: %w", err)
 	}
-
 	if _, err := tx.ExecContext(ctx, "TRUNCATE TABLE Query"); err != nil {
 		return fmt.Errorf("failed to truncate Query table: %w", err)
 	}
-
 	if _, err := tx.ExecContext(ctx, "TRUNCATE TABLE QueryFingerprint"); err != nil {
 		return fmt.Errorf("failed to truncate QueryFingerprint table: %w", err)
 	}
-
 	if _, err := tx.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 1"); err != nil {
 		return fmt.Errorf("failed to enable foreign key checks: %w", err)
 	}
@@ -102,7 +94,7 @@ func (o *OutputDB) insertBatch(ctx context.Context, batch []*query.Query) (int, 
 	defer tx.Rollback()
 
 	fingerprintValues := make([]string, 0, len(batch))
-	fingerprintArgs := make([]interface{}, 0, len(batch)*2)
+	fingerprintArgs := make([]any, 0, len(batch))
 	seenFingerprints := make(map[uint64]bool)
 
 	for _, q := range batch {
@@ -114,17 +106,14 @@ func (o *OutputDB) insertBatch(ctx context.Context, batch []*query.Query) (int, 
 	}
 
 	if len(fingerprintValues) > 0 {
-		fingerprintSQL := fmt.Sprintf(`
-				INSERT IGNORE INTO QueryFingerprint (Hash)
-				VALUES %s
-			`, strings.Join(fingerprintValues, ", "))
+		fingerprintSQL := fmt.Sprintf(`INSERT IGNORE INTO QueryFingerprint (Hash) VALUES %s`, strings.Join(fingerprintValues, ", "))
 		if _, err := tx.ExecContext(ctx, fingerprintSQL, fingerprintArgs...); err != nil {
 			return 0, fmt.Errorf("failed to batch insert fingerprints: %w", err)
 		}
 	}
 
 	queryValues := make([]string, 0, len(batch))
-	queryArgs := make([]interface{}, 0, len(batch)*4)
+	queryArgs := make([]any, 0, len(batch)*4)
 	seenQueries := make(map[uint64]bool)
 
 	for _, q := range batch {
@@ -142,24 +131,12 @@ func (o *OutputDB) insertBatch(ctx context.Context, batch []*query.Query) (int, 
 		return 0, tx.Commit()
 	}
 
-	querySQL := fmt.Sprintf(`
-    INSERT INTO Query (Hash, Offset, Length, FingerprintHash)
-    VALUES %s
-    `, strings.Join(queryValues, ", "))
-
-	if _, err := o.execContext(ctx, tx, querySQL, queryArgs...); err != nil {
+	querySQL := fmt.Sprintf(`INSERT INTO Query (Hash, Offset, Length, FingerprintHash) VALUES %s`, strings.Join(queryValues, ", "))
+	if _, err := tx.ExecContext(ctx, querySQL, queryArgs...); err != nil {
 		return 0, fmt.Errorf("failed to batch insert queries: %w", err)
 	}
 
 	return len(seenQueries), tx.Commit()
-
-}
-
-func (o *OutputDB) execContext(ctx context.Context, tx *sqlx.Tx, query string, args ...interface{}) (sql.Result, error) {
-	start := time.Now()
-	res, err := tx.ExecContext(ctx, query, args...)
-	o.insertLats <- time.Since(start)
-	return res, err
 }
 
 func (o *OutputDB) StartOutput(ctx context.Context, inQueryChan <-chan *query.Query) error {
@@ -170,33 +147,19 @@ func (o *OutputDB) StartOutput(ctx context.Context, inQueryChan <-chan *query.Qu
 		}
 	}
 
-	reporterCtx, reporterStop := context.WithCancel(ctx)
-	defer reporterStop()
-
 	go func() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		lastCount := o.insertedQueries.Load()
-		lats := make([]time.Duration, 0, 100)
 		for {
 			select {
-			case <-reporterCtx.Done():
-				fmt.Printf("Completed %d queries\n", o.insertedQueries.Load())
+			case <-ctx.Done():
+				finalCount := o.insertedQueries.Load()
+				fmt.Printf("\nCompleted %d queries\n", finalCount)
 				return
-			case lat := <-o.insertLats:
-				lats = append(lats, lat)
 			case <-ticker.C:
-				if len(lats) > 0 {
-					sum := time.Duration(0)
-					for _, lat := range lats {
-						sum += lat
-					}
-					fmt.Printf("avg insert latency: %d ms\n", int(sum.Milliseconds())/len(lats))
-					lats = lats[:0]
-				}
-
 				count := o.insertedQueries.Load()
-				fmt.Printf("Inserted %d queries (%d/s)\n", o.insertedQueries.Load(), count-lastCount)
+				fmt.Printf("\rInserted %d queries (%d/s)", count, count-lastCount)
 				lastCount = count
 			}
 		}
@@ -218,7 +181,6 @@ func (o *OutputDB) StartOutput(ctx context.Context, inQueryChan <-chan *query.Qu
 		}
 	}
 
-	// CRITICAL FIX: Process the final partial batch
 	if len(batch) > 0 {
 		currentBatch := batch
 		o.pool.Submit(func() {
@@ -231,14 +193,9 @@ func (o *OutputDB) StartOutput(ctx context.Context, inQueryChan <-chan *query.Qu
 	}
 
 	o.pool.StopAndWait()
+	// Tunggu sebentar agar reporter goroutine sempat mencetak status terakhir
+	time.Sleep(100 * time.Millisecond)
 	return nil
-}
-
-func (o *OutputDB) Concurrency() OutputConcurrencyInfo {
-	return OutputConcurrencyInfo{
-		MaxConcurrency:     10,
-		CurrentConcurrency: int(o.pool.RunningWorkers()),
-	}
 }
 
 func (o *OutputDB) Destroy() error {
