@@ -16,11 +16,11 @@ import (
 )
 
 type QuerySourceDBConfig struct {
-	DSN                     string `mapstructure:"dsn" yaml:"dsn" validate:"required"`
+	DSN                     string `mapstructure:"dsn" yaml:"dsn" validate:"omitempty"`
 	FingerprintWeightsQuery string `mapstructure:"fingerprint_weights_query" yaml:"fingerprint_weights_query" validate:"omitempty"`
 	QueriesFetchQuery       string `mapstructure:"queries_fetch_query" yaml:"queries_fetch_query" validate:"omitempty"`
 	QueriesIdsFetchQuery    string `mapstructure:"queries_ids_fetch_query" yaml:"queries_ids_fetch_query" validate:"omitempty"`
-	InputFile               string `mapstructure:"input_file" yaml:"input_file" validate:"required"`
+	InputFile               string `mapstructure:"input_file" yaml:"input_file" validate:"omitempty"`
 }
 
 type QuerySourceDB struct {

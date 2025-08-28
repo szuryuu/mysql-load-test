@@ -1,36 +1,9 @@
 db_dsn: "root:root@tcp(127.0.0.1:13306)/MySQLLoadTester?parseTime=true&tls=false"
+
 queries_data_source:
   type: file
-  db:
+  file:
     input_file: "queries.bin"
-    dsn: "root:root@tcp(127.0.0.1:13306)/MySQLLoadTester?parseTime=true&tls=false"
-    fingerprint_weights_query: |
-      SELECT
-        qf.Fingerprint as Fingerprint,
-        qf.Hash as Hash,
-        1000 as Count,
-        5000 as Total,
-        20.0 as Weight
-      FROM QueryFingerprint qf
-      WHERE qf.Fingerprint IS NOT NULL
-        AND qf.Fingerprint != ''
-        AND qf.Hash IS NOT NULL
-    queries_fetch_query: |
-      select
-        q.Offset, q.Length
-      from
-        Query q
-      where
-        q.ID = {{.ID}}
-      limit 1
-
-    queries_ids_fetch_query: |
-      select
-        ID,
-        FingerprintHash
-      from
-        Query
-
 count: -1
 run_mode: random
 reporting:
@@ -39,3 +12,4 @@ reporting:
 concurrency: 200
 metrics:
   enabled: true
+  addr: ":2112" # <-- Tambahkan address di sini jika belum ada
