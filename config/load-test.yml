@@ -1,8 +1,8 @@
 db_dsn: "root:root@tcp(127.0.0.1:13306)/MySQLLoadTester?parseTime=true&tls=false"
 queries_data_source:
-  type: db
+  type: file
   db:
-    input_file: "queries.txt"
+    input_file: "queries.bin"
     dsn: "root:root@tcp(127.0.0.1:13306)/MySQLLoadTester?parseTime=true&tls=false"
     fingerprint_weights_query: |
       SELECT
@@ -36,6 +36,6 @@ run_mode: random
 reporting:
   file: /dev/stdout
   format: human
-concurrency: 100
+concurrency: 200
 metrics:
   enabled: true

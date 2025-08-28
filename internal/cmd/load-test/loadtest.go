@@ -14,6 +14,8 @@ func createDataSource(cfg *Config) (QueryDataSource, error) {
 	switch cfg.QueriesDataSource.Type {
 	case "db":
 		return NewQuerySourceDB(&cfg.QueriesDataSource.QueryDataSourceDB, cfg.Concurrency, nil)
+	case "file":
+		return NewQuerySourceFile(&cfg.QueriesDataSource.QueryDataSourceFile)
 	// case "inline":
 	// 	return NewQuerySourceInline(cfg.QueryDataSourceDB)
 	default:

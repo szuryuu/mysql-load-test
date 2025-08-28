@@ -94,19 +94,23 @@ func (q *Querier) executeQueryFast(ctx context.Context, queryStr string, args ..
 	start := time.Now()
 
 	// Use prepared statement if available
-	if stmt, exists := q.stmtCache[queryStr]; exists && stmt != nil {
-		_, execErr := stmt.ExecContext(ctx, args...)
-		execLatency := time.Since(start)
-		return &QueryResult{
-			Err:                 execErr,
-			CompletionTimestamp: time.Now(),
-			ExplainLatency:      0, // Skip explain for performance
-			ExecLatency:         execLatency,
-		}, execErr
+	stmt, exists := q.stmtCache[queryStr]
+	if !exists {
+		var err error
+		stmt, err = q.db.PrepareContext(ctx, queryStr)
+		if err != nil {
+			execLatency := time.Since(start)
+			return &QueryResult{
+				Err:                 err,
+				CompletionTimestamp: time.Now(),
+				ExplainLatency:      0,
+				ExecLatency:         execLatency,
+			}, err
+		}
+		q.stmtCache[queryStr] = stmt
 	}
 
-	// Fallback to direct execution
-	_, execErr := q.db.ExecContext(ctx, queryStr, args...)
+	_, execErr := stmt.ExecContext(ctx, args...)
 	execLatency := time.Since(start)
 
 	return &QueryResult{
