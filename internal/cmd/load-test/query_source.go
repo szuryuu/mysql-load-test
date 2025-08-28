@@ -6,8 +6,8 @@ import (
 )
 
 type QueryDataSourceResult struct {
-	Query       string
-	Fingerprint string
+	Query string
+	// Fingerprint string
 }
 
 type QueryDataSource interface {
@@ -18,6 +18,7 @@ type QueryDataSource interface {
 }
 
 type QueryFingerprintData struct {
+	// Fingerprint string
 	Hash      uint64
 	FreqTotal int64
 }
@@ -28,28 +29,25 @@ type QueryFingerprintWeight struct {
 }
 
 type QueryFingerprintWeights struct {
-	weights     map[string]*QueryFingerprintWeight
+	weights     []*QueryFingerprintWeight
 	totalWeight float64
 }
 
 func NewQueryFingerprintWeights() *QueryFingerprintWeights {
 	return &QueryFingerprintWeights{
-		weights: make(map[string]*QueryFingerprintWeight),
+		weights: make([]*QueryFingerprintWeight, 0),
 	}
 }
 
-func (qw *QueryFingerprintWeights) Add(fingerprint string, weight float64, fingerprintData *QueryFingerprintData) {
-	qw.weights[fingerprint] = &QueryFingerprintWeight{
+func (qw *QueryFingerprintWeights) Add(weight float64, fingerprintData *QueryFingerprintData) {
+	qw.weights = append(qw.weights, &QueryFingerprintWeight{
 		fingerprintData: fingerprintData,
 		weight:          weight,
-	}
-	// fmt.Println(query[:min(len(query), 50)], weight)
+	})
 	qw.totalWeight += weight
 }
 
 func (qw *QueryFingerprintWeights) GetRandomWeighted() *QueryFingerprintData {
-	var selectedFingerprintData *QueryFingerprintData
-
 	if qw.totalWeight <= 0 || len(qw.weights) == 0 {
 		return nil
 	}
@@ -60,16 +58,13 @@ func (qw *QueryFingerprintWeights) GetRandomWeighted() *QueryFingerprintData {
 	for _, queryWeight := range qw.weights {
 		cursor += queryWeight.weight
 		if cursor >= r {
-			selectedFingerprintData = queryWeight.fingerprintData
-			break
-		}
-	}
-
-	if selectedFingerprintData == nil {
-		for _, queryWeight := range qw.weights {
 			return queryWeight.fingerprintData
 		}
 	}
 
-	return selectedFingerprintData
+	if len(qw.weights) > 0 {
+		return qw.weights[len(qw.weights)-1].fingerprintData
+	}
+
+	return nil
 }

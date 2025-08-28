@@ -131,7 +131,7 @@ func (o *OutputDB) insertBatch(ctx context.Context, batch []*query.Query) (int, 
 		return 0, tx.Commit()
 	}
 
-	querySQL := fmt.Sprintf(`INSERT INTO Query (Hash, Offset, Length, FingerprintHash) VALUES %s`, strings.Join(queryValues, ", "))
+	querySQL := fmt.Sprintf(`INSERT IGNORE INTO Query (Hash, Offset, Length, FingerprintHash) VALUES %s`, strings.Join(queryValues, ", "))
 	if _, err := tx.ExecContext(ctx, querySQL, queryArgs...); err != nil {
 		return 0, fmt.Errorf("failed to batch insert queries: %w", err)
 	}
@@ -193,7 +193,6 @@ func (o *OutputDB) StartOutput(ctx context.Context, inQueryChan <-chan *query.Qu
 	}
 
 	o.pool.StopAndWait()
-	// Tunggu sebentar agar reporter goroutine sempat mencetak status terakhir
 	time.Sleep(100 * time.Millisecond)
 	return nil
 }

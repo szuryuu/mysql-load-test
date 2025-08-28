@@ -102,18 +102,27 @@ func (qsdb *QuerySourceDB) fetchWeights(ctx context.Context) error {
 	defer rows.Close()
 
 	for rows.Next() {
-		var fingerprint string
 		var hash uint64
-		var freqTotal int64
+		var count, total int64
 		var weight float64
+
 		// expect: `Hash`, `Count`, Total, Weight
-		if err := rows.Scan(&hash, &freqTotal, &qsdb.queriesCountTotal, &weight); err != nil {
+		if err := rows.Scan(&hash, &count, &total, &weight); err != nil {
 			return err
 		}
-		qsdb.fingerprintWeights.Add(fingerprint, weight, &QueryFingerprintData{
-			Hash:      hash,
-			FreqTotal: freqTotal,
-		})
+		qsdb.fingerprintWeights.Add(
+			fmt.Sprintf("%d", hash),
+			weight,
+			&QueryFingerprintData{
+				Hash:      hash,
+				FreqTotal: count,
+			},
+		)
+
+	}
+
+	if qsdb.fingerprintWeights.totalWeight == 0 {
+		return fmt.Errorf("no query weights were loaded from the database, ensure the QueryFingerprint table is populated")
 	}
 
 	return nil

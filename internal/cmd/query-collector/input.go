@@ -44,7 +44,7 @@ func (i *InputCommon) WrapReader(r io.Reader) (io.Reader, error) {
 	case "zstd":
 		zstdReader := zstd.NewReader(r)
 		reader = zstdReader
-	case "raw":
+	case "raw", "plain":
 		reader = r
 	default:
 		return nil, fmt.Errorf("unsupported encoding: %s", i.cfg.Encoding)
