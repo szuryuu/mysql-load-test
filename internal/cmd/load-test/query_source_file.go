@@ -109,7 +109,6 @@ func (qsf *QuerySourceFile) Init(ctx context.Context) error {
 		for hash, count := range fingerprintCounts {
 			weight := float64(count) / float64(totalQueries)
 			qsf.fingerprintWeights.Add(
-				"",
 				weight,
 				&QueryFingerprintData{Hash: hash},
 			)
@@ -162,7 +161,7 @@ func (qsf *QuerySourceFile) GetRandomWeightedQuery(ctx context.Context) (*QueryD
 	queryBytes := qsf.dataBuffer[info.offset : info.offset+info.length]
 
 	return &QueryDataSourceResult{
-		Query:       string(queryBytes),
-		Fingerprint: "",
+		Query: string(queryBytes),
+		// Fingerprint: "",
 	}, nil
 }

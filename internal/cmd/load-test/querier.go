@@ -181,9 +181,9 @@ func (q *Querier) do(ctx context.Context) error {
 
 	if err != nil {
 		result.Err = querierError{
-			query:       query.Query,
-			fingerprint: query.Fingerprint,
-			err:         err,
+			query: query.Query,
+			// fingerprint: query.Fingerprint,
+			err: err,
 		}
 	}
 
@@ -211,11 +211,12 @@ func (q *Querier) Run(ctx context.Context) error {
 }
 
 type querierError struct {
-	query       string
-	fingerprint string
-	err         error
+	query string
+	// fingerprint string
+	err error
 }
 
 func (qe querierError) Error() string {
-	return fmt.Sprintf("error executing query \"%s\" with fingerprint \"%s\": %v", qe.query, qe.fingerprint, qe.err)
+	// return fmt.Sprintf("error executing query \"%s\" with fingerprint \"%s\": %v", qe.query, qe.fingerprint, qe.err)
+	return fmt.Sprintf("error executing query \"%s\": %v", qe.query, qe.err)
 }

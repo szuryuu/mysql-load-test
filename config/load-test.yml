@@ -17,14 +17,13 @@ queries_data_source:
       CROSS JOIN queryFingerprintTotal qft ON 1=1
       GROUP BY qf2.Hash
     queries_fetch_query: |
-      select
+      SELECT
         q.Offset, q.Length
-      from
+      FROM
         Query q
-      inner join QueryFingerprint qf on q.FingerprintHash = qf.Hash
-      where
-        qf.Hash = {{.Hash}}
-      limit 1
+      WHERE
+        q.ID = {{.ID}}
+      LIMIT 1
 
     queries_ids_fetch_query: |
       select

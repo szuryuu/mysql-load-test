@@ -110,14 +110,10 @@ func (qsdb *QuerySourceDB) fetchWeights(ctx context.Context) error {
 		if err := rows.Scan(&hash, &count, &total, &weight); err != nil {
 			return err
 		}
-		qsdb.fingerprintWeights.Add(
-			fmt.Sprintf("%d", hash),
-			weight,
-			&QueryFingerprintData{
-				Hash:      hash,
-				FreqTotal: count,
-			},
-		)
+		qsdb.fingerprintWeights.Add(weight, &QueryFingerprintData{
+			Hash:      hash,
+			FreqTotal: count,
+		})
 
 	}
 

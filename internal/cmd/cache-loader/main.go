@@ -43,33 +43,25 @@ func main() {
 		defer close(inQueryChan)
 		reader := bufio.NewReader(file)
 		for {
-			var queryLength uint32
-			if err := binary.Read(reader, binary.LittleEndian, &queryLength); err != nil {
+			var q query.Query
+
+			if err := binary.Read(reader, binary.LittleEndian, &q.Hash); err != nil {
 				if err != io.EOF {
-					fmt.Fprintf(os.Stderr, "Error reading length: %v\n", err)
+					fmt.Fprintf(os.Stderr, "Error reading hash from cache: %v\n", err)
 				}
 				break
 			}
-
-			rawQuery := make([]byte, queryLength)
-			if _, err := io.ReadFull(reader, rawQuery); err != nil {
-				fmt.Fprintf(os.Stderr, "Error reading query: %v\n", err)
+			if err := binary.Read(reader, binary.LittleEndian, &q.FingerprintHash); err != nil {
+				break
+			}
+			if err := binary.Read(reader, binary.LittleEndian, &q.Offset); err != nil {
+				break
+			}
+			if err := binary.Read(reader, binary.LittleEndian, &q.Length); err != nil {
 				break
 			}
 
-			var fingerprintHash uint64
-			if err := binary.Read(reader, binary.LittleEndian, &fingerprintHash); err != nil {
-				fmt.Fprintf(os.Stderr, "Error reading hash: %v\n", err)
-				break
-			}
-
-			inQueryChan <- &query.Query{
-				Raw:             rawQuery,
-				FingerprintHash: fingerprintHash,
-				Hash:            fingerprintHash,
-				Offset:          0,
-				Length:          0,
-			}
+			inQueryChan <- &q
 		}
 	}()
 

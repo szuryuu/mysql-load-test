@@ -30,18 +30,10 @@ func NewCacheOutput(cfg OutputCacheConfig, common *OutputCommon) (*OutputCache, 
 		return nil, fmt.Errorf("error opening file: %w", err)
 	}
 
-	writer, err := common.WrapWriter(file)
-	if err != nil {
-		file.Close()
-		return nil, fmt.Errorf("error wrapping writer: %w", err)
-	}
+	writer := file
 	closers := []io.Closer{file}
 
 	bufioWriter := bufio.NewWriterSize(writer, 1024*1024)
-
-	if cfg.BatchSize == 0 {
-		cfg.BatchSize = 1000
-	}
 
 	return &OutputCache{
 		cfg:     cfg,
@@ -49,7 +41,7 @@ func NewCacheOutput(cfg OutputCacheConfig, common *OutputCommon) (*OutputCache, 
 		closers: closers,
 		bufferPool: &sync.Pool{
 			New: func() interface{} {
-				b := make([]byte, 4096)
+				b := make([]byte, 32)
 				return &b
 			},
 		},
@@ -83,31 +75,22 @@ func (o *OutputCache) StartOutput(ctx context.Context, inQueryChan <-chan *query
 	defer o.writer.Flush()
 
 	for q := range inQueryChan {
-		if q == nil || len(q.Raw) == 0 {
+		if q == nil {
 			continue
 		}
 
-		queryLength := uint32(len(q.Raw))
-		totalSize := 4 + len(q.Raw) + 8
+		totalSize := 32
 
 		bufPtr := o.bufferPool.Get().(*[]byte)
 		buf := *bufPtr
 		defer o.bufferPool.Put(bufPtr)
 
-		if cap(buf) < totalSize {
-			buf = make([]byte, totalSize)
-			*bufPtr = buf
-		}
-		buf = buf[:totalSize]
+		binary.LittleEndian.PutUint64(buf[0:8], q.Hash)
+		binary.LittleEndian.PutUint64(buf[8:16], q.FingerprintHash)
+		binary.LittleEndian.PutUint64(buf[16:24], q.Offset)
+		binary.LittleEndian.PutUint64(buf[24:32], q.Length)
 
-		binary.LittleEndian.PutUint32(buf[0:4], queryLength)
-
-		copy(buf[4:], q.Raw)
-
-		offset := 4 + len(q.Raw)
-		binary.LittleEndian.PutUint64(buf[offset:], q.FingerprintHash)
-
-		if _, err := o.writer.Write(buf); err != nil {
+		if _, err := o.writer.Write(buf[:totalSize]); err != nil {
 			return fmt.Errorf("error writing query data: %w", err)
 		}
 	}
