@@ -106,14 +106,13 @@ func (qsdb *QuerySourceDB) fetchWeights(ctx context.Context) error {
 		var hash uint64
 		var freqTotal int64
 		var weight float64
-		// expect: Fingerprint, `Hash`, `Count`, Total, Weight
-		if err := rows.Scan(&fingerprint, &hash, &freqTotal, &qsdb.queriesCountTotal, &weight); err != nil {
+		// expect: `Hash`, `Count`, Total, Weight
+		if err := rows.Scan(&hash, &freqTotal, &qsdb.queriesCountTotal, &weight); err != nil {
 			return err
 		}
 		qsdb.fingerprintWeights.Add(fingerprint, weight, &QueryFingerprintData{
-			Fingerprint: fingerprint,
-			Hash:        hash,
-			FreqTotal:   freqTotal,
+			Hash:      hash,
+			FreqTotal: freqTotal,
 		})
 	}
 
@@ -309,8 +308,7 @@ func (qsdb *QuerySourceDB) GetRandomWeightedQuery(ctx context.Context) (*QueryDa
 	}
 
 	queryResult := &QueryDataSourceResult{
-		Query:       string(rawQuery),
-		Fingerprint: fingerprintData.Fingerprint,
+		Query: string(rawQuery),
 	}
 
 	qsdb.mu.Lock()

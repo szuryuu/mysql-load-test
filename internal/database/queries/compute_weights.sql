@@ -1,10 +1,9 @@
 with queryFingerprintTotal as (
-  select 
+  select
     count(*) as c
   from QueryFingerprint qf
 )
 select
-  qf2.Fingerprint as Fingerprint,
   qf2.Hash as Hash,
   count(*) as Count,
   qft.c as Total,

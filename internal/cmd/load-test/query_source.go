@@ -18,9 +18,8 @@ type QueryDataSource interface {
 }
 
 type QueryFingerprintData struct {
-	Fingerprint string
-	Hash        uint64
-	FreqTotal   int64
+	Hash      uint64
+	FreqTotal int64
 }
 
 type QueryFingerprintWeight struct {
