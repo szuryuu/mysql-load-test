@@ -11,7 +11,7 @@ type Config struct {
 }
 
 type QueryDataSourceConfig struct {
-	Type                string                 `mapstructure:"type" yaml:"type" validate:"required,oneof=db,file"`
+	Type                string                 `mapstructure:"type" yaml:"type" validate:"required,oneof=db file"`
 	QueryDataSourceDB   *QuerySourceDBConfig   `mapstructure:"db" yaml:"db"`
 	QueryDataSourceFile *QuerySourceFileConfig `mapstructure:"file" yaml:"file"`
 }

@@ -7,7 +7,7 @@ queries_data_source:
 
 count: -1
 run_mode: random
-concurrency: 200
+concurrency: 100
 metrics:
   enabled: true
   addr: ":2112"

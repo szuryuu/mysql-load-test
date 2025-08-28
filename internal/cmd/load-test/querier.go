@@ -43,9 +43,6 @@ type Querier struct {
 	perfStats *QuerierInternalPerfStats
 	logger    *zerolog.Logger
 	db        *DBConn
-
-	// Pre-allocated statement cache to reduce parsing overhead
-	stmtCache map[string]*sql.Stmt
 }
 
 type QuerierInternalPerfStats struct {
@@ -85,32 +82,13 @@ func NewQuerier(qds QueryDataSource, qpsTicker *time.Ticker, logger *zerolog.Log
 		perfStats: NewQuerierInternalPerfStats(),
 		logger:    logger,
 		db:        db,
-		stmtCache: make(map[string]*sql.Stmt),
 	}
 }
 
-// Optimized execution without EXPLAIN overhead
 func (q *Querier) executeQueryFast(ctx context.Context, queryStr string, args ...any) (*QueryResult, error) {
 	start := time.Now()
 
-	// Use prepared statement if available
-	stmt, exists := q.stmtCache[queryStr]
-	if !exists {
-		var err error
-		stmt, err = q.db.PrepareContext(ctx, queryStr)
-		if err != nil {
-			execLatency := time.Since(start)
-			return &QueryResult{
-				Err:                 err,
-				CompletionTimestamp: time.Now(),
-				ExplainLatency:      0,
-				ExecLatency:         execLatency,
-			}, err
-		}
-		q.stmtCache[queryStr] = stmt
-	}
-
-	_, execErr := stmt.ExecContext(ctx, args...)
+	_, execErr := q.db.ExecContext(ctx, queryStr, args...)
 	execLatency := time.Since(start)
 
 	return &QueryResult{

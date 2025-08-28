@@ -5,6 +5,8 @@ import (
 	"io"
 	"sort"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 type InternalStats struct {
@@ -113,7 +115,28 @@ func runReporter(r *Report, ctx context.Context, qds QueryDataSource, querier *Q
 		case <-ticker.C:
 			// collect stats from internal components
 
-			qdsPerfStats := qds.PerfStats().(QuerySourceDBInternalPerfStats)
+			// Use a type switch to handle different perf stats types
+			switch perfStats := qds.PerfStats().(type) {
+			case QuerySourceDBInternalPerfStats:
+				r.InternalStats.QueriesFetched = int64(perfStats.QueriesFetchTotal)
+				r.InternalStats.CacheHits = int64(perfStats.CacheStats.HitsTotal)
+				r.InternalStats.CacheMisses = int64(perfStats.CacheStats.MissesTotal)
+				if perfStats.CacheStats.HitsTotal+perfStats.CacheStats.MissesTotal > 0 {
+					r.InternalStats.CacheHitRate = float64(perfStats.CacheStats.HitsTotal) / float64(perfStats.CacheStats.HitsTotal+perfStats.CacheStats.MissesTotal) * 100
+				}
+				r.InternalStats.CacheEvictions = int64(perfStats.CacheStats.EvictionsTotal)
+				r.InternalStats.CacheNewItems = int64(perfStats.CacheStats.NewItemsTotal)
+				r.InternalStats.FetchWeightsLat = perfStats.FetchWeightsLat.Round(time.Millisecond).String()
+			case QuerySourceFileInternalPerfStats:
+				// You can add fields to InternalStats to store file-specific stats if you want.
+				// For now, we'll just log them.
+				log.Info().
+					Int("queries_loaded", perfStats.QueriesLoaded).
+					Int("unique_fingerprints", perfStats.UniqueFingerprints).
+					Dur("init_latency", perfStats.InitLatency).
+					Msg("QuerySourceFile stats")
+			}
+
 			querierPerfStats := querier.PerfStats()
 
 			lats := querierPerfStats.GetRandomWeightedQueryLats()
@@ -125,13 +148,6 @@ func runReporter(r *Report, ctx context.Context, qds QueryDataSource, querier *Q
 				p99 = lats[len(lats)*99/100]
 			}
 
-			r.InternalStats.QueriesFetched = int64(qdsPerfStats.QueriesFetchTotal)
-			r.InternalStats.CacheHits = int64(qdsPerfStats.CacheStats.HitsTotal)
-			r.InternalStats.CacheMisses = int64(qdsPerfStats.CacheStats.MissesTotal)
-			r.InternalStats.CacheHitRate = float64(qdsPerfStats.CacheStats.HitsTotal) / float64(qdsPerfStats.CacheStats.HitsTotal+qdsPerfStats.CacheStats.MissesTotal) * 100
-			r.InternalStats.CacheEvictions = int64(qdsPerfStats.CacheStats.EvictionsTotal)
-			r.InternalStats.CacheNewItems = int64(qdsPerfStats.CacheStats.NewItemsTotal)
-			r.InternalStats.FetchWeightsLat = qdsPerfStats.FetchWeightsLat.Round(time.Millisecond).String()
 			r.InternalStats.LatP50 = p50.Round(time.Millisecond).String()
 			r.InternalStats.LatP95 = p95.Round(time.Millisecond).String()
 			r.InternalStats.LatP99 = p99.Round(time.Millisecond).String()
@@ -163,5 +179,4 @@ func runReporter(r *Report, ctx context.Context, qds QueryDataSource, querier *Q
 	}
 
 	r.done <- true
-
 }
