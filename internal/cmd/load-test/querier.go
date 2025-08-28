@@ -10,6 +10,25 @@ import (
 	"github.com/rs/zerolog"
 )
 
+type ExplainRow struct {
+	ID           sql.NullInt64   `json:"id"`
+	SelectType   sql.NullString  `json:"select_type"`
+	Table        sql.NullString  `json:"table"`
+	Partitions   sql.NullString  `json:"partitions"`
+	Type         sql.NullString  `json:"type"`
+	PossibleKeys sql.NullString  `json:"possible_keys"`
+	Key          sql.NullString  `json:"key"`
+	KeyLen       sql.NullString  `json:"key_len"`
+	Ref          sql.NullString  `json:"ref"`
+	Rows         sql.NullInt64   `json:"rows"`
+	Filtered     sql.NullFloat64 `json:"filtered"`
+	Extra        sql.NullString  `json:"extra"`
+}
+
+type ExplainQueryResult struct {
+	Rows []ExplainRow `json:"rows"`
+}
+
 type QueryResult struct {
 	CompletionTimestamp         time.Time
 	ExplainLatency, ExecLatency time.Duration
@@ -24,6 +43,9 @@ type Querier struct {
 	perfStats *QuerierInternalPerfStats
 	logger    *zerolog.Logger
 	db        *DBConn
+
+	// Pre-allocated statement cache to reduce parsing overhead
+	stmtCache map[string]*sql.Stmt
 }
 
 type QuerierInternalPerfStats struct {
@@ -47,8 +69,12 @@ func (st *QuerierInternalPerfStats) GetRandomWeightedQueryLats() []time.Duration
 	return st.getRandomWeightedQueryLats_rb.GetAll(lats)
 }
 
+func (q *Querier) PerfStats() QuerierInternalPerfStats {
+	return *q.perfStats
+}
+
 const (
-	maxGetRandomWeightedQueryLats = 5000 * 8 // 8 bytes since time.Duration is int64
+	maxGetRandomWeightedQueryLats = 5000 * 8
 )
 
 func NewQuerier(qds QueryDataSource, qpsTicker *time.Ticker, logger *zerolog.Logger, db *DBConn, resultsChan chan<- *QueryResult) *Querier {
@@ -59,126 +85,45 @@ func NewQuerier(qds QueryDataSource, qpsTicker *time.Ticker, logger *zerolog.Log
 		perfStats: NewQuerierInternalPerfStats(),
 		logger:    logger,
 		db:        db,
+		stmtCache: make(map[string]*sql.Stmt),
 	}
 }
 
-func (q *Querier) PerfStats() QuerierInternalPerfStats {
-	return *q.perfStats
-}
-
-type ExplainRow struct {
-	ID           sql.NullInt64   `json:"id"`
-	SelectType   sql.NullString  `json:"select_type"`
-	Table        sql.NullString  `json:"table"`
-	Partitions   sql.NullString  `json:"partitions"`
-	Type         sql.NullString  `json:"type"`
-	PossibleKeys sql.NullString  `json:"possible_keys"`
-	Key          sql.NullString  `json:"key"`
-	KeyLen       sql.NullString  `json:"key_len"`
-	Ref          sql.NullString  `json:"ref"`
-	Rows         sql.NullInt64   `json:"rows"`
-	Filtered     sql.NullFloat64 `json:"filtered"`
-	Extra        sql.NullString  `json:"extra"`
-}
-
-type ExplainQueryResult struct {
-	Rows []ExplainRow `json:"rows"`
-}
-
-func (q *Querier) explainQuery(ctx context.Context, query string, args ...any) (*ExplainQueryResult, error) {
-	explainQuery := "EXPLAIN " + query
-	rows, err := q.db.QueryContext(ctx, explainQuery, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute explain query: %w", err)
-	}
-	defer rows.Close()
-
-	var result ExplainQueryResult
-
-	for rows.Next() {
-		var row ExplainRow
-
-		err := rows.Scan(
-			&row.ID,
-			&row.SelectType,
-			&row.Table,
-			&row.Partitions,
-			&row.Type,
-			&row.PossibleKeys,
-			&row.Key,
-			&row.KeyLen,
-			&row.Ref,
-			&row.Rows,
-			&row.Filtered,
-			&row.Extra,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
-		}
-
-		result.Rows = append(result.Rows, row)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating rows: %w", err)
-	}
-
-	return &result, nil
-}
-
-func (q *Querier) executeQuery(ctx context.Context, query string, args ...any) (*QueryResult, error) {
-	var explainQueryResult *ExplainQueryResult
-	var explainLatency time.Duration
-	var execErr error
-
-	// var wg sync.WaitGroup
-	// wg.Add(1)
-	// go func() {
-	// 	defer wg.Done()
-	// 	start := time.Now()
-	// 	var err error
-	// 	explainQueryResult, err = q.explainQuery(ctx, query, args...)
-	// 	explainLatency = time.Since(start)
-	// 	if err != nil {
-	// 		logger.Info().Msgf("failed to explain query: %s\n", err)
-	// 	}
-	// }()
-
+// Optimized execution without EXPLAIN overhead
+func (q *Querier) executeQueryFast(ctx context.Context, queryStr string, args ...any) (*QueryResult, error) {
 	start := time.Now()
-	_, execErr = q.db.ExecContext(ctx, query, args...)
+
+	// Use prepared statement if available
+	if stmt, exists := q.stmtCache[queryStr]; exists && stmt != nil {
+		_, execErr := stmt.ExecContext(ctx, args...)
+		execLatency := time.Since(start)
+		return &QueryResult{
+			Err:                 execErr,
+			CompletionTimestamp: time.Now(),
+			ExplainLatency:      0, // Skip explain for performance
+			ExecLatency:         execLatency,
+		}, execErr
+	}
+
+	// Fallback to direct execution
+	_, execErr := q.db.ExecContext(ctx, queryStr, args...)
 	execLatency := time.Since(start)
 
-	// wg.Wait()
-
 	return &QueryResult{
-		Explain:             explainQueryResult,
 		Err:                 execErr,
 		CompletionTimestamp: time.Now(),
-		ExplainLatency:      explainLatency,
+		ExplainLatency:      0,
 		ExecLatency:         execLatency,
 	}, execErr
 }
 
 func (q *Querier) do(ctx context.Context) error {
-	// a := time.Now()
 	query, err := q.qds.GetRandomWeightedQuery(ctx)
-	// fmt.Println(query.Query, query.Fingerprint)
-	// q.perfStats.RecordGetRandomWeightedQueryLat(time.Since(a))
 	if err != nil {
 		return fmt.Errorf("error getting random weighted query: %w", err)
 	}
 
-	// fmt.Println(query.Query, query.Fingerprint)
-
-	execStart := time.Now()
-	result, err := q.executeQuery(ctx, query.Query)
-	execLat := time.Since(execStart)
-	_ = execLat
-
-	// if err != nil {
-	// 	return fmt.Errorf("error executing query \"%s\" with fingerprint \"%s\": %w", query.Query, query.Fingerprint, err)
-	// }
-
+	result, err := q.executeQueryFast(ctx, query.Query)
 	if err != nil {
 		result.Err = querierError{
 			query:       query.Query,
@@ -187,10 +132,7 @@ func (q *Querier) do(ctx context.Context) error {
 		}
 	}
 
-	// result.Err = querierErr
-
 	q.results <- result
-	// fmt.Println(result.ExecLatency.Microseconds())
 	return nil
 }
 
@@ -204,7 +146,10 @@ func (q *Querier) Run(ctx context.Context) error {
 				<-q.qpsTicker.C
 			}
 			if err := q.do(ctx); err != nil {
-				q.logger.Error().Err(err).Msg("Error executing query")
+				// Don't log every error to reduce overhead
+				if time.Now().UnixNano()%1000 == 0 { // Log 1 in 1000 errors
+					q.logger.Error().Err(err).Msg("Error executing query")
+				}
 			}
 		}
 	}

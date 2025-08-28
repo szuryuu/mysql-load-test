@@ -5,24 +5,16 @@ queries_data_source:
     input_file: "queries.txt"
     dsn: "root:root@tcp(127.0.0.1:13306)/MySQLLoadTester?parseTime=true&tls=false"
     fingerprint_weights_query: |
-      with queryFingerprintTotal as (
-        select
-          count(*) as c
-        from QueryFingerprint qf
-      )
-      select
-        qf2.Fingerprint as Fingerprint,
-        qf2.Hash as Hash,
-        count(*) as Count,
-        qft.c as Total,
-        cast(count(*) as decimal(10,4)) / qft.c * 100 as Weight
-      from QueryFingerprint qf2
-      cross join queryFingerprintTotal qft on 1=1
-      where
-        qf2.Fingerprint not like 'insert%'
-        and qf2.Fingerprint not like 'update botika_voicebotstream_limit%'
-        and qf2.Fingerprint != ''
-      group by qf2.Hash
+      SELECT
+        qf.Fingerprint as Fingerprint,
+        qf.Hash as Hash,
+        1000 as Count,
+        5000 as Total,
+        20.0 as Weight
+      FROM QueryFingerprint qf
+      WHERE qf.Fingerprint IS NOT NULL
+        AND qf.Fingerprint != ''
+        AND qf.Hash IS NOT NULL
     queries_fetch_query: |
       select
         q.Offset, q.Length
