@@ -8,13 +8,12 @@ type Config struct {
 	RunMode           string                 `mapstructure:"run_mode" yaml:"run_mode" validate:"required,oneof=sequential random"`
 	QPS               int                    `mapstructure:"qps" yaml:"qps" validate:"omitempty,gte=0"`
 	Metrics           MetricsConfig          `mapstructure:"metrics" yaml:"metrics" validate:"required"`
-	// Reporting         ReportingConfig        `mapstructure:"reporting" yaml:"reporting" validate:"required"`
 }
 
 type QueryDataSourceConfig struct {
-	Type                string                `mapstructure:"type" yaml:"type" validate:"required,oneof=db,file"`
-	QueryDataSourceDB   QuerySourceDBConfig   `mapstructure:"db" yaml:"db"`
-	QueryDataSourceFile QuerySourceFileConfig `mapstructure:"file" yaml:"file"`
+	Type                string                 `mapstructure:"type" yaml:"type" validate:"required,oneof=db,file"`
+	QueryDataSourceDB   *QuerySourceDBConfig   `mapstructure:"db" yaml:"db"`
+	QueryDataSourceFile *QuerySourceFileConfig `mapstructure:"file" yaml:"file"`
 }
 
 type ReportingConfig struct {

@@ -13,11 +13,9 @@ import (
 func createDataSource(cfg *Config) (QueryDataSource, error) {
 	switch cfg.QueriesDataSource.Type {
 	case "db":
-		return NewQuerySourceDB(&cfg.QueriesDataSource.QueryDataSourceDB, cfg.Concurrency, nil)
+		return NewQuerySourceDB(cfg.QueriesDataSource.QueryDataSourceDB, cfg.Concurrency, nil)
 	case "file":
-		return NewQuerySourceFile(&cfg.QueriesDataSource.QueryDataSourceFile)
-	// case "inline":
-	// 	return NewQuerySourceInline(cfg.QueryDataSourceDB)
+		return NewQuerySourceFile(cfg.QueriesDataSource.QueryDataSourceFile)
 	default:
 		return nil, fmt.Errorf("unsupported query data source type: %s", cfg.QueriesDataSource.Type)
 	}
@@ -28,11 +26,11 @@ func performLoadTest() error {
 	defer cancel(nil)
 
 	dbConn := NewDBConn(RetryConfig{
-		MaxRetries:      1,                      // Retry up to 3 times
-		InitialDelay:    100 * time.Millisecond, // Start with 100ms delay
-		MaxDelay:        5 * time.Second,        // Cap at 5 seconds
-		BackoffFactor:   2.0,                    // Double delay each retry
-		ConnectionCheck: true,                   // Ping before queries
+		MaxRetries:      1,
+		InitialDelay:    100 * time.Millisecond,
+		MaxDelay:        5 * time.Second,
+		BackoffFactor:   2.0,
+		ConnectionCheck: true,
 	})
 	logger.Info().Msg("Opening connection to target database")
 	if err := dbConn.OpenWithTimeout(ctx, config.DBDSN, config.Concurrency, 5*time.Second); err != nil {
@@ -53,7 +51,6 @@ func performLoadTest() error {
 	defer qds.Destroy()
 	logger.Info().Msg("Query data source ready")
 
-	// Start metrics server if enabled
 	var metricsServer *MetricsServer
 	if config.Metrics.Enabled {
 		metricsServer = NewMetricsServer(config.Metrics.Addr)
@@ -122,7 +119,6 @@ func performLoadTest() error {
 	return nil
 }
 
-// Add this method to QuerierInternalPerfStats
 func (st *QuerierInternalPerfStats) GetTotalQueries() int {
 	return st.getRandomWeightedQueryLats_rb.Count()
 }

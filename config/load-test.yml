@@ -4,12 +4,10 @@ queries_data_source:
   type: file
   file:
     input_file: "queries.bin"
+
 count: -1
 run_mode: random
-reporting:
-  file: /dev/stdout
-  format: human
 concurrency: 200
 metrics:
   enabled: true
-  addr: ":2112" # <-- Tambahkan address di sini jika belum ada
+  addr: ":2112"
