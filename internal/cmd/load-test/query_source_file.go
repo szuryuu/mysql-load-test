@@ -23,12 +23,9 @@ type queryInfo struct {
 type QuerySourceFile struct {
 	cfg *QuerySourceFileConfig
 
-	dataBuffer []byte
-
-	queryInfos []queryInfo
-
-	fingerprintIndex map[uint64][]int
-
+	dataBuffer         []byte
+	queryInfos         []queryInfo
+	fingerprintIndex   map[uint64][]int
 	fingerprintWeights *QueryFingerprintWeights
 
 	perfStats QuerySourceFileInternalPerfStats
