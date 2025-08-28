@@ -179,15 +179,15 @@ func (q *Querier) do(ctx context.Context) error {
 	// 	return fmt.Errorf("error executing query \"%s\" with fingerprint \"%s\": %w", query.Query, query.Fingerprint, err)
 	// }
 
-	var querierErr querierError
 	if err != nil {
-		querierErr = querierError{
+		result.Err = querierError{
 			query:       query.Query,
 			fingerprint: query.Fingerprint,
 			err:         err,
 		}
 	}
-	result.Err = querierErr
+
+	// result.Err = querierErr
 
 	q.results <- result
 	// fmt.Println(result.ExecLatency.Microseconds())
