@@ -1,7 +1,7 @@
 #!/bin/bash
 
 OUTPUT_FILE="queries.txt"
-NUM_QUERIES=10000
+NUM_QUERIES=1000000
 
 if ! command -v uuidgen &> /dev/null; then
     echo "Error: Command 'uuidgen' not found."
@@ -20,7 +20,7 @@ LOG_LEVELS=("INFO" "WARN" "ERROR" "DEBUG" "CRITICAL")
 for i in $(seq 1 ${NUM_QUERIES}); do
 
   TIMESTAMP=$(date -u +"%b %d, %Y %H:%M:%S")
-  NANOSECONDS=$(printf "%09d" $(( i * 100000 + (RANDOM % 99999) )) )
+  NANOSECONDS=$(printf "%09d" $(( (i * 100000 + (RANDOM % 99999)) % 1000000000 )) )
   FULL_TIMESTAMP="${TIMESTAMP}.${NANOSECONDS} UTC"
 
   QUERY_TYPE=$(( i % 5 ))
