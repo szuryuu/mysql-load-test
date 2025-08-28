@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand"
 	"mysql-load-test/internal/lrucache"
-	"os"
 	"strings"
 	"sync"
 	"text/template"
@@ -23,16 +22,22 @@ type QuerySourceDBConfig struct {
 	InputFile               string `mapstructure:"input_file" yaml:"input_file" validate:"required"`
 }
 
+type queryMetadata struct {
+	Offset uint64
+	Length uint64
+}
+
 type QuerySourceDB struct {
 	cfg *QuerySourceDBConfig
 
 	// Each fingerprint hash has cache to cache query by offset.
 	queriesCaches map[uint64]*lrucache.LRUCache[int, *QueryDataSourceResult]
 
-	fingerprintWeights *QueryFingerprintWeights
+	fingerprintWeights    *QueryFingerprintWeights
+	queryIdsByFingerprint map[uint64][]int
 
 	// Map of fingerprint hash to query id
-	queryIds map[uint64][]int
+	queryMetadataByID map[int]queryMetadata
 
 	queriesCountTotal uint64
 	db                *DBConn
@@ -68,17 +73,13 @@ func executeTemplate(tmpl string, data any, templateName string) (string, error)
 
 func NewQuerySourceDB(cfg *QuerySourceDBConfig, concurrency int, fingerprintWeights *QueryFingerprintWeights) (*QuerySourceDB, error) {
 	qsdb := &QuerySourceDB{
-		fingerprintWeights: fingerprintWeights,
-		cfg:                cfg,
-		perfStats: &QuerySourceDBInternalPerfStats{
-			QueriesFetchTotal: 0,
-		},
-		concurrency: concurrency,
+		fingerprintWeights:    fingerprintWeights,
+		cfg:                   cfg,
+		perfStats:             &QuerySourceDBInternalPerfStats{},
+		concurrency:           concurrency,
+		queryIdsByFingerprint: make(map[uint64][]int),
+		queryMetadataByID:     make(map[int]queryMetadata),
 	}
-
-	queriesCaches := make(map[uint64]*lrucache.LRUCache[int, *QueryDataSourceResult])
-	qsdb.queriesCaches = queriesCaches
-
 	return qsdb, nil
 }
 
@@ -89,13 +90,7 @@ func (qsdb *QuerySourceDB) fetchWeights(ctx context.Context) error {
 
 	qsdb.fingerprintWeights = NewQueryFingerprintWeights()
 
-	fetchFingerprintWeightsQuery := qsdb.cfg.FingerprintWeightsQuery
-
-	if fetchFingerprintWeightsQuery == "" {
-		return fmt.Errorf("no fetch fingerprint weight query specified")
-	}
-
-	rows, err := qsdb.db.QueryContext(ctx, fetchFingerprintWeightsQuery)
+	rows, err := qsdb.db.QueryContext(ctx, qsdb.cfg.FingerprintWeightsQuery)
 	if err != nil {
 		return err
 	}
@@ -106,7 +101,6 @@ func (qsdb *QuerySourceDB) fetchWeights(ctx context.Context) error {
 		var count, total int64
 		var weight float64
 
-		// expect: `Hash`, `Count`, Total, Weight
 		if err := rows.Scan(&hash, &count, &total, &weight); err != nil {
 			return err
 		}
@@ -114,60 +108,47 @@ func (qsdb *QuerySourceDB) fetchWeights(ctx context.Context) error {
 			Hash:      hash,
 			FreqTotal: count,
 		})
-
 	}
 
 	if qsdb.fingerprintWeights.totalWeight == 0 {
-		return fmt.Errorf("no query weights were loaded from the database, ensure the QueryFingerprint table is populated")
+		return fmt.Errorf("no query weights were loaded from the database")
 	}
 
 	return nil
 
 }
 
-func (qsdb *QuerySourceDB) fetchQueryIds(ctx context.Context) error {
-	if qsdb.queryIds != nil {
-		return nil
-	}
+func (qsdb *QuerySourceDB) fetchAllQueryMetadata(ctx context.Context) error {
+	logger.Info().Msg("Pre-loading all query metadata into memory...")
 
-	qsdb.queryIds = make(map[uint64][]int)
+	query := "SELECT ID, FingerprintHash, `Offset`, `Length` FROM Query"
 
-	fetchIdsQuery := qsdb.cfg.QueriesIdsFetchQuery
-
-	if fetchIdsQuery == "" {
-		return fmt.Errorf("no fetch query ids query specified")
-	}
-
-	rows, err := qsdb.db.QueryContext(ctx, fetchIdsQuery)
+	rows, err := qsdb.db.QueryContext(ctx, query)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
+	loadedCount := 0
 	for rows.Next() {
 		var id int
-		var hash uint64
-		// expect: ID, Hash
-		if err := rows.Scan(&id, &hash); err != nil {
+		var fingerprintHash, offset, length uint64
+		if err := rows.Scan(&id, &fingerprintHash, &offset, &length); err != nil {
 			return err
 		}
-		_, ok := qsdb.queryIds[hash]
-		if !ok {
-			qsdb.queryIds[hash] = make([]int, 0, 1)
-		}
-		qsdb.queryIds[hash] = append(qsdb.queryIds[hash], id)
+
+		qsdb.queryIdsByFingerprint[fingerprintHash] = append(qsdb.queryIdsByFingerprint[fingerprintHash], id)
+		qsdb.queryMetadataByID[id] = queryMetadata{Offset: offset, Length: length}
+		loadedCount++
 	}
 
+	logger.Info().Int("count", loadedCount).Msg("Successfully pre-loaded query metadata.")
 	return nil
-
 }
 
 func (qsdb *QuerySourceDB) Init(ctx context.Context) error {
 	qsdb.fetchWeightsOnce = sync.OnceValue(func() error {
 		return qsdb.fetchWeights(ctx)
-	})
-	qsdb.fetchIdsOnce = sync.OnceValue(func() error {
-		return qsdb.fetchQueryIds(ctx)
 	})
 
 	qsdb.initOnce = sync.OnceValue(func() error {
@@ -178,17 +159,6 @@ func (qsdb *QuerySourceDB) Init(ctx context.Context) error {
 		}
 		qsdb.mmapReader = reader
 
-		_, err = os.Stat(qsdb.cfg.InputFile)
-		if err != nil {
-			return fmt.Errorf("failed to get file info: %w", err)
-		}
-		// qsdb.mmapData = make([]byte, fileInfo.Size())
-		// _, err = qsdb.mmapReader.ReadAt(qsdb.mmapData, 0)
-		// if err != nil {
-		// 	return fmt.Errorf("failed to read mmap data into slice: %w", err)
-		// }
-		logger.Info().Msg("Input file successfully memory-mapped")
-
 		logger.Info().Msg("Opening database connection for query data source DB")
 		db := NewDBConn(RetryConfig{
 			MaxRetries:    3,
@@ -196,29 +166,19 @@ func (qsdb *QuerySourceDB) Init(ctx context.Context) error {
 			MaxDelay:      5 * time.Second,
 			BackoffFactor: 2.0,
 		})
-		err = db.Open(qsdb.cfg.DSN, qsdb.concurrency)
-		if err != nil {
+		if err := db.Open(qsdb.cfg.DSN, qsdb.concurrency); err != nil {
 			return fmt.Errorf("error opening database: %w", err)
 		}
 		qsdb.db = db
 
-		logger.Info().Msg("Fetching query weights from the database")
-		a := time.Now()
-		err = qsdb.fetchWeightsOnce()
-		if err != nil {
-			err = fmt.Errorf("error fetching weights: %w", err)
+		logger.Info().Msg("Fetching query weights...")
+		if err := qsdb.fetchWeights(ctx); err != nil {
+			return fmt.Errorf("error fetching weights: %w", err)
 		}
-		fetchLat := time.Since(a)
-		qsdb.perfStats.FetchWeightsLat = fetchLat
 
-		logger.Info().Msg("Fetching query ids from the database")
-		a = time.Now()
-		err = qsdb.fetchIdsOnce()
-		if err != nil {
-			err = fmt.Errorf("error fetching ids: %w", err)
+		if err := qsdb.fetchAllQueryMetadata(ctx); err != nil {
+			return fmt.Errorf("error pre-loading query metadata: %w", err)
 		}
-		fetchIdsLat := time.Since(a)
-		qsdb.perfStats.FetchIdsLat = fetchIdsLat
 
 		return nil
 	})
@@ -255,76 +215,33 @@ func (qsdb *QuerySourceDB) GetRandomWeightedQuery(ctx context.Context) (*QueryDa
 	if fingerprintData == nil {
 		return nil, fmt.Errorf("failed to get random weighted fingerprint")
 	}
-
 	fingerprintHash := fingerprintData.Hash
 
-	queryIds, ok := qsdb.queryIds[fingerprintHash]
+	queryIds, ok := qsdb.queryIdsByFingerprint[fingerprintHash]
 	if !ok || len(queryIds) == 0 {
-		return nil, fmt.Errorf("no query IDs found for fingerprint hash: %d", fingerprintHash)
+		return nil, fmt.Errorf("no query IDs found in-memory for fingerprint hash: %d", fingerprintHash)
 	}
-
 	queryId := queryIds[rand.Intn(len(queryIds))]
 
-	qsdb.mu.RLock()
-	queryCache, cacheExists := qsdb.queriesCaches[fingerprintHash]
-	qsdb.mu.RUnlock()
-
-	if cacheExists {
-		if queryResult, found := queryCache.Get(queryId); found {
-			qsdb.perfStats.QueriesFetchTotal++
-			return queryResult, nil
-		}
+	meta, ok := qsdb.queryMetadataByID[queryId]
+	if !ok {
+		return nil, fmt.Errorf("no query metadata found in-memory for ID: %d", queryId)
 	}
 
-	var offset, length uint64
-
-	fetchQuery, err := executeTemplate(qsdb.cfg.QueriesFetchQuery, map[string]any{"ID": queryId}, "queries_fetch_query")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create query fetch template: %w", err)
-	}
-
-	row, err := qsdb.db.QueryRowContext(ctx, fetchQuery)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute fetch query for ID %d: %w", queryId, err)
-	}
-	if err := row.Scan(&offset, &length); err != nil {
-		return nil, fmt.Errorf("failed to scan offset/length from DB for ID %d: %w", queryId, err)
-	}
-
-	if offset+length > uint64(qsdb.mmapReader.Len()) {
-		return nil, fmt.Errorf("offset + length (%d) exceeds mmap size (%d)", offset+length, qsdb.mmapReader.Len())
-	}
-
-	lineBytes := make([]byte, length)
-	_, err = qsdb.mmapReader.ReadAt(lineBytes, int64(offset))
-	if err != nil {
+	lineBytes := make([]byte, meta.Length)
+	if _, err := qsdb.mmapReader.ReadAt(lineBytes, int64(meta.Offset)); err != nil {
 		return nil, fmt.Errorf("failed to read segment data from mmap: %w", err)
 	}
 
 	parts := bytes.SplitN(lineBytes, []byte("\t"), 2)
 	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid query format in file at offset %d", offset)
+		return nil, fmt.Errorf("invalid query format in file at offset %d", meta.Offset)
 	}
-
 	rawQuery := bytes.TrimSpace(parts[1])
 
-	if len(rawQuery) == 0 {
-		return nil, fmt.Errorf("read empty query from file at offset %d", offset)
-	}
-
-	queryResult := &QueryDataSourceResult{
+	return &QueryDataSourceResult{
 		Query: string(rawQuery),
-	}
-
-	qsdb.mu.Lock()
-	if !cacheExists {
-		queryCache = lrucache.New[int, *QueryDataSourceResult](1000)
-		qsdb.queriesCaches[fingerprintHash] = queryCache
-	}
-	queryCache.Set(queryId, queryResult)
-	qsdb.mu.Unlock()
-
-	return queryResult, nil
+	}, nil
 }
 
 type QuerySourceDBInternalPerfStats struct {

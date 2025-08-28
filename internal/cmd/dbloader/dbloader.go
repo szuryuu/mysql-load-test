@@ -117,9 +117,9 @@ func (o *OutputDB) insertBatch(ctx context.Context, batch []*query.Query) (int, 
 	seenQueries := make(map[uint64]bool)
 
 	for _, q := range batch {
-		if !isValidQuery(q.Raw) {
-			continue
-		}
+		// if !isValidQuery(q.Raw) {
+		// 	continue
+		// }
 		if !seenQueries[q.Hash] {
 			seenQueries[q.Hash] = true
 			queryValues = append(queryValues, "(?, ?, ?, ?)")
