@@ -7,3 +7,4 @@ samples/
 capture_no_ssl.pcap
 queries.txt
 queries.bin
+gen_queries.sh
