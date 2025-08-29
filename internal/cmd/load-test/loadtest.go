@@ -48,7 +48,7 @@ func performLoadTest() error {
 	if qdsInitErr != nil {
 		return fmt.Errorf("error initializing query data source: %w", qdsInitErr)
 	}
-	defer qds.Destroy()
+	// defer qds.Destroy()
 	logger.Info().Msg("Query data source ready")
 
 	// Start metrics server if enabled
@@ -116,6 +116,7 @@ func performLoadTest() error {
 	}
 
 	wg.Wait()
+	qds.Destroy()
 
 	return nil
 }
