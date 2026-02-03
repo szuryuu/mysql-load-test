@@ -6,16 +6,16 @@ A high-performance, Go-based toolkit designed to stress test MySQL databases by 
 
 ## Key Features
 
--   **Real-Traffic Replay**
+-   **Real-Traffic Replay**  
     Capture production traffic directly from network packets (PCAP) or text logs and replay them to simulate realistic load patterns rather than synthetic benchmarks.
 
--   **High-Performance Load Generator**
+-   **High-Performance Load Generator**  
     Built with Go’s lightweight concurrency primitives (Goroutines) to generate massive throughput with low resource overhead, capable of saturating database connections efficiently.
 
--   **Real-time Web Dashboard**
+-   **Real-time Web Dashboard**  
     Includes a built-in web server and UI that provides instant visibility into test performance, visualizing metrics like Queries Per Second (QPS), Latency (P50/P90/P99), and Error Rates.
 
--   **Query Fingerprinting & Analysis**
+-   **Query Fingerprinting & Analysis**  
     Tools to normalize and fingerprint queries, allowing you to analyze query distribution, frequency weights, and resource consumption before running the test.
 
 ## Suite Components
