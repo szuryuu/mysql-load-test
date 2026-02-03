@@ -78,8 +78,6 @@ A high-performance, Go-based toolkit designed to stress test MySQL databases by 
     -   Dashboard URL: http://localhost:2112 (or the port configured in metrics.addr)
     -   Metrics Available: QPS, Latency (P99/P50), and Error Rates. 
 
----
-
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
